@@ -14,6 +14,15 @@ def run_model_iter(model, datatype, file_path, questions_list, nI=1, question_ke
     Returns:
         로그 데이터
     """
+    # Debug prints
+    print(f"🔍 Debug: Sending prompt for {question_key} question 1: {questions_list[0] if questions_list else 'No questions'}")
+    print(f"🔍 Debug: File path: {file_path}")
+    print(f"🔍 Debug: Data type: {datatype}")
+    print(f"🔍 Debug: Model type: {type(model)}")
+    print(f"🔍 Debug: Model has send_message: {hasattr(model, 'send_message')}")
+    print(f"🔍 Debug: Model has process_prompt: {hasattr(model, 'process_prompt')}")
+    print(f"🔍 Debug: Model has model: {hasattr(model, 'model')}")
+    print(f"🔍 Debug: Model has processor: {hasattr(model, 'processor')}")
     # 질문 리스트 정리
     q_list = [q for q in questions_list if q is not None and q.strip()]
     
@@ -41,8 +50,11 @@ def run_model_iter(model, datatype, file_path, questions_list, nI=1, question_ke
             }
 
             try:
+                print(f"🔍 Debug: Using send_message method")
                 response = model.send_message(prompt)
+                print(f"🔍 Debug: send_message response: '{response}'")
                 sub_result = int(response)
+                print(f"🔍 Debug: Response received: {sub_result}")
             except (ValueError, TypeError):
                 print(f"Warning: Invalid response '{response}' for {question_key} question {j+1}, defaulting to 0")
                 sub_result = 0

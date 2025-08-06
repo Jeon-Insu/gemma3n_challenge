@@ -50,10 +50,13 @@ class LLMIterationTask:
             if not video_prefix:
                 return {"error": "비디오가 녹화되지 않았습니다. 먼저 비디오를 녹화해주세요."}
             
-            # 사용자별 폴더 생성 (video_prefix와 동일한 UUID 사용)
+            # 사용자별 폴더 확인 (video_prefix와 동일한 UUID 사용)
             user_id = st.session_state.get('user_id', st.session_state.get('video_prefix', 'default_user'))
             user_record_dir = Path(f"./recordings/{user_id}")
-            user_record_dir.mkdir(parents=True, exist_ok=True)
+            
+            # 폴더가 존재하지 않으면 오류 반환
+            if not user_record_dir.exists():
+                return {"error": "비디오 녹화 폴더가 존재하지 않습니다. 먼저 비디오를 녹화해주세요."}
             
             # 질문 세트 및 데이터 타입 가져오기
             from config.questions import get_question_set, get_question_data_type
@@ -71,16 +74,43 @@ class LLMIterationTask:
             
             # 데이터 타입별 파일 경로 설정
             if data_type == "oneframe_image":
-                # 첫 번째 프레임만 사용
-                file_path = user_record_dir / "images" / f"{video_prefix}_frame_0001.png"
+                # 중간 프레임 선택 (짝수일 때는 앞쪽, 홀수일 때는 정중앙)
+                images_dir = user_record_dir / "images"
+                if not images_dir.exists():
+                    return {"error": f"이미지 디렉토리를 찾을 수 없습니다: {images_dir}"}
+                
+                # 모든 프레임 파일 찾기
+                frame_files = sorted(list(images_dir.glob(f"{video_prefix}_frame_*.png")))
+                if not frame_files:
+                    return {"error": f"프레임 파일을 찾을 수 없습니다: {images_dir}"}
+                
+                # 중간 프레임 선택 로직
+                total_frames = len(frame_files)
+                if total_frames == 1:
+                    # 프레임이 1개일 때: 해당 프레임 선택
+                    middle_index = 0
+                else:
+                    # 프레임이 여러 개일 때: 중간 인덱스 선택 (짝수일 때는 앞쪽)
+                    middle_index = (total_frames - 1) // 2
+                
+                file_path = frame_files[middle_index]
+                print(f"🔍 Debug: Selected frame {middle_index + 1} of {total_frames} frames for {question_key}")
+                
                 if not file_path.exists():
-                    return {"error": f"이미지 파일을 찾을 수 없습니다: {file_path}"}
+                    return {"error": f"선택된 이미지 파일을 찾을 수 없습니다: {file_path}"}
                 
                 # LLM 반복 질문 실행 (단일 프레임)
                 try:
                     # 단일 프레임 처리 전에 모델 상태 초기화
+                    print(f"🔄 Clearing history for {question_key} (oneframe_image)")
                     if hasattr(model, 'clear_history'):
-                        model.clear_history()
+                        try:
+                            model.clear_history()
+                            print(f"✅ History cleared successfully for {question_key}")
+                        except Exception as clear_error:
+                            print(f"⚠️ Warning: Failed to clear history for {question_key}: {clear_error}")
+                    else:
+                        print(f"⚠️ Warning: Model does not have clear_history method for {question_key}")
                     
                     log = run_model_iter(
                         model=model,
@@ -91,9 +121,24 @@ class LLMIterationTask:
                         question_key=question_key
                     )
                     
-                    # 메모리 정리
+                    # 메모리 정리 및 추가 모델 상태 초기화
                     import gc
                     gc.collect()
+                    
+                    # 추가 모델 상태 초기화 시도
+                    try:
+                        if hasattr(model, 'reset'):
+                            model.reset()
+                            print(f"✅ Model reset completed for {question_key}")
+                    except Exception as reset_error:
+                        print(f"⚠️ Warning: Model reset failed for {question_key}: {reset_error}")
+                    
+                    try:
+                        if hasattr(model, 'empty_cache'):
+                            model.empty_cache()
+                            print(f"✅ Model cache cleared for {question_key}")
+                    except Exception as cache_error:
+                        print(f"⚠️ Warning: Model cache clear failed for {question_key}: {cache_error}")
                     
                 except Exception as e:
                     print(f"Warning: Error processing single frame: {str(e)}")
@@ -128,8 +173,15 @@ class LLMIterationTask:
                 for frame_idx, frame_path in enumerate(frame_files):
                     try:
                         # 각 프레임 처리 전에 모델 상태 초기화
+                        print(f"🔄 Clearing history for {question_key} (allframe_image, frame {frame_idx})")
                         if hasattr(model, 'clear_history'):
-                            model.clear_history()
+                            try:
+                                model.clear_history()
+                                print(f"✅ History cleared successfully for {question_key} (frame {frame_idx})")
+                            except Exception as clear_error:
+                                print(f"⚠️ Warning: Failed to clear history for {question_key} (frame {frame_idx}): {clear_error}")
+                        else:
+                            print(f"⚠️ Warning: Model does not have clear_history method for {question_key} (frame {frame_idx})")
                         
                         frame_log = run_model_iter(
                             model=model,
@@ -147,9 +199,24 @@ class LLMIterationTask:
                         
                         log.extend(frame_log)
                         
-                        # 메모리 정리
+                        # 메모리 정리 및 추가 모델 상태 초기화
                         import gc
                         gc.collect()
+                        
+                        # 추가 모델 상태 초기화 시도
+                        try:
+                            if hasattr(model, 'reset'):
+                                model.reset()
+                                print(f"✅ Model reset completed for {question_key} (frame {frame_idx})")
+                        except Exception as reset_error:
+                            print(f"⚠️ Warning: Model reset failed for {question_key} (frame {frame_idx}): {reset_error}")
+                        
+                        try:
+                            if hasattr(model, 'empty_cache'):
+                                model.empty_cache()
+                                print(f"✅ Model cache cleared for {question_key} (frame {frame_idx})")
+                        except Exception as cache_error:
+                            print(f"⚠️ Warning: Model cache clear failed for {question_key} (frame {frame_idx}): {cache_error}")
                         
                     except Exception as e:
                         print(f"Warning: Error processing frame {frame_idx}: {str(e)}")
@@ -182,8 +249,15 @@ class LLMIterationTask:
                 # LLM 반복 질문 실행 (오디오)
                 try:
                     # 오디오 처리 전에 모델 상태 초기화
+                    print(f"🔄 Clearing history for {question_key} (audio)")
                     if hasattr(model, 'clear_history'):
-                        model.clear_history()
+                        try:
+                            model.clear_history()
+                            print(f"✅ History cleared successfully for {question_key}")
+                        except Exception as clear_error:
+                            print(f"⚠️ Warning: Failed to clear history for {question_key}: {clear_error}")
+                    else:
+                        print(f"⚠️ Warning: Model does not have clear_history method for {question_key}")
                     
                     log = run_model_iter(
                         model=model,
@@ -194,9 +268,24 @@ class LLMIterationTask:
                         question_key=question_key
                     )
                     
-                    # 메모리 정리
+                    # 메모리 정리 및 추가 모델 상태 초기화
                     import gc
                     gc.collect()
+                    
+                    # 추가 모델 상태 초기화 시도
+                    try:
+                        if hasattr(model, 'reset'):
+                            model.reset()
+                            print(f"✅ Model reset completed for {question_key}")
+                    except Exception as reset_error:
+                        print(f"⚠️ Warning: Model reset failed for {question_key}: {reset_error}")
+                    
+                    try:
+                        if hasattr(model, 'empty_cache'):
+                            model.empty_cache()
+                            print(f"✅ Model cache cleared for {question_key}")
+                    except Exception as cache_error:
+                        print(f"⚠️ Warning: Model cache clear failed for {question_key}: {cache_error}")
                     
                 except Exception as e:
                     print(f"Warning: Error processing audio: {str(e)}")
@@ -285,9 +374,11 @@ class LLMIterationTask:
             validation_result["errors"].append("비디오 처리가 완료되지 않았습니다.")
         
         # 모델 초기화 확인
-        if not st.session_state.get('model_initialized', False):
+        model_initialized = st.session_state.get('model_initialized', False)
+        
+        if not model_initialized:
             validation_result["valid"] = False
-            validation_result["errors"].append("LLM 모델이 초기화되지 않았습니다.")
+            validation_result["errors"].append("LLM 모델이 초기화되지 않았습니다. 사이드바에서 모델을 초기화해주세요.")
         
         return validation_result
     
@@ -382,8 +473,9 @@ class LLMIterationTask:
             
             if len(questions_responses) >= 2:
                 if questions_responses[0] == 9 and questions_responses[1] == 9:
-                    
-                    Q2_result = 1
+                    Q2_result = -1
+                else:
+                    Q2_result = 0
                     
         elif question_key == "Q3":
             # Q3: 각 프레임별로 Q3와 Q3_1이 모두 9인 경우를 확인
@@ -401,7 +493,7 @@ class LLMIterationTask:
             
             if frame_scores:
                 avg_score = sum(frame_scores) / len(frame_scores)
-                if avg_score > 0.7:  # 70% 이상의 프레임에서 조건 만족
+                if avg_score > 0.15:  # 70% 이상의 프레임에서 조건 만족
                     
                     Q3_result = 1
                     
@@ -416,7 +508,7 @@ class LLMIterationTask:
             
             if frame_count > 0:
                 avg_response = total_response / frame_count
-                if avg_response < 0.3:
+                if avg_response < 0.15:
                     
                     Q4_result = 1
                     
@@ -455,7 +547,7 @@ class LLMIterationTask:
             
             if frame_count > 0:
                 avg_response = total_response / frame_count
-                if avg_response > 0.7:
+                if avg_response > 0.15:
                     
                     Q7_result = 1
                     
@@ -476,12 +568,14 @@ class LLMIterationTask:
                         Q9_result = 1
                     
         elif question_key == "Q10":
-            # Q10: 결과값을 Q10_result에 저장
+            # Q10: 결과값을 Q10_result에 저장 (9인 경우 -1로 처리)
             for iteration in log:
                 for question in iteration.get('questions', []):
                     response = question.get('response', 0)
                     if response == 9:
-                        Q10_result = 1
+                        Q10_result = -1
+                    else:
+                        Q10_result = 0
                     
         elif question_key == "Q11":
             # Q11: 결과값을 Q11_result에 저장
@@ -509,18 +603,41 @@ class LLMIterationTask:
                     
         elif question_key == "Q14":
             # Q14: text_feature 설정
-            questions_responses = []
-            for iteration in log:
-                for question in iteration.get('questions', []):
-                    questions_responses.append(question.get('response', 0))
+            # 각 반복에서 Q14의 실제 실행된 질문 응답을 수집
+            q14_responses = []
+            q14_1_responses = []
+            q14_2_responses = []
             
-            if questions_responses[0] == 0:
+            for iteration in log:
+                questions = iteration.get('questions', [])
+                
+                # 첫 번째 질문은 항상 있음
+                if len(questions) >= 1:
+                    q14_responses.append(questions[0].get('response', 0))  # Q14
+                
+                # 두 번째 질문이 있는 경우
+                if len(questions) >= 2:
+                    q14_1_responses.append(questions[1].get('response', 0))  # Q14_1
+                
+                # 세 번째 질문이 있는 경우
+                if len(questions) >= 3:
+                    q14_2_responses.append(questions[2].get('response', 0))  # Q14_2
+            
+            # 가장 빈번한 응답을 사용
+            from collections import Counter
+            
+            q14_final = Counter(q14_responses).most_common(1)[0][0] if q14_responses else 0
+            q14_1_final = Counter(q14_1_responses).most_common(1)[0][0] if q14_1_responses else 0
+            q14_2_final = Counter(q14_2_responses).most_common(1)[0][0] if q14_2_responses else 0
+            
+            # text_feature 결정 로직
+            if q14_final == 0:
                 text_feature = "identification"
             else:
-                if questions_responses[1] == 0:
+                if q14_1_final == 0:
                     text_feature = "eccentricity"
                 else:
-                    if questions_responses[2] == 9:
+                    if q14_2_final == 9:
                         text_feature = "optimism"
                     else:
                         text_feature = "none"
@@ -531,11 +648,7 @@ class LLMIterationTask:
                 for question in iteration.get('questions', []):
                     Q15_result = question.get('response', 0)
         
-        # image_feature와 audio_feature 계산
-        image_feature = Q1_result - Q2_result + Q3_result + Q4_result + Q5_result
-        audio_feature = Q8_result + Q9_result - Q10_result + Q11_result + Q12_result
-        
-        # 최종 결과 구성
+        # 최종 결과 구성 (feature 점수는 execute_screening_task에서 계산)
         final_result = {
             "question_key": question_key,
             "data_type": data_type,
@@ -548,12 +661,6 @@ class LLMIterationTask:
                 "zero_rate": response_rates.get(0, 0),
                 "one_rate": response_rates.get(1, 0),
                 "nine_rate": response_rates.get(9, 0)
-            },
-            "feature_scores": {
-                "image_feature": image_feature,
-                "audio_feature": audio_feature,
-                "text_feature": text_feature,
-                "Q15_result": Q15_result
             },
             "question_results": {
                 "Q1_result": Q1_result,
@@ -569,7 +676,9 @@ class LLMIterationTask:
                 "Q11_result": Q11_result,
                 "Q12_result": Q12_result,
                 "Q13_result": Q13_result
-            }
+            },
+            "text_feature": text_feature,
+            "Q15_result": Q15_result
         }
         
         # 데이터 타입별 추가 정보
@@ -592,43 +701,31 @@ class LLMIterationTask:
         Returns:
             Dict[str, int]: screening 문항 9개의 점수
         """
-        # Feature 점수 계산
-        image_feature = 0
-        audio_feature = 0
-        text_feature = ""
-        Q15_result = None
+        # 이미 누적된 값이 있는 결과에서 직접 가져오기
+        cumulative_result = None
+        for result in all_results.values():
+            if result.get('status') == 'completed' and 'final_result' in result:
+                cumulative_result = result
+                break
         
-        # 각 질문 세트별로 feature 점수 누적
-        for question_key, result in all_results.items():
-            if result.get('status') == 'completed':
-                feature_scores = result.get('final_result', {}).get('feature_scores', {})
-                image_feature += feature_scores.get('image_feature', 0)
-                audio_feature += feature_scores.get('audio_feature', 0)
-                if not text_feature and feature_scores.get('text_feature'):
-                    text_feature = feature_scores.get('text_feature')
-                if Q15_result is None and feature_scores.get('Q15_result') is not None:
-                    Q15_result = feature_scores.get('Q15_result')
+        if not cumulative_result:
+            return {}
         
-        # Image_score와 Audio_score 계산
-        image_score = 1 if image_feature >= 2 else 0
-        audio_score = 1 if audio_feature >= 3 else 0
+        # 이미 누적된 값들 직접 사용
+        final_result = cumulative_result['final_result']
+        cumulative_question_results = final_result.get('question_results', {})
+        cumulative_feature_scores = final_result.get('feature_scores', {})
         
-        # Screening 문항별 점수 계산
+        # Image_score와 Audio_score 계산 (누적된 값 사용)
+        image_score = 1 if cumulative_feature_scores.get('image_feature', 0) >= 2 else 0
+        audio_score = 1 if cumulative_feature_scores.get('audio_feature', 0) >= 3 else 0
+        
+        # Screening 문항별 점수 계산 (누적된 값 사용)
         screening_scores = {}
         
-                # 각 질문의 처리된 결과값을 가져오는 헬퍼 함수
-        def get_processed_question_result(question_key):
-            """특정 질문의 process_log_data에서 처리된 결과값을 가져옵니다."""
-            result = all_results.get(question_key, {})
-            if result.get('status') == 'completed':
-                final_result = result.get('final_result', {})
-                question_results = final_result.get('question_results', {})
-                return question_results.get(f'{question_key}_result', 0)
-            return 0
-        
         # 문항 1: 흥미저하 (Q1 또는 Q3 둘 중 하나라도 1이면 1)
-        q1_result = get_processed_question_result('Q1')
-        q3_result = get_processed_question_result('Q3')
+        q1_result = cumulative_question_results.get('Q1_result', 0)
+        q3_result = cumulative_question_results.get('Q3_result', 0)
         screening_scores['interest_loss'] = 1 if (q1_result == 1 or q3_result == 1) else 0
 
         # 문항 2: 우울문항 (image_score 또는 audio_score 둘 중 하나라도 1이면 1)
@@ -638,35 +735,35 @@ class LLMIterationTask:
         screening_scores['sleep'] = 0
 
         # 문항 4: 피로 문항 (Q3 또는 Q4 또는 Q8 또는 Q9 중 1개라도 1이면 1)
-        q3_fatigue = get_processed_question_result('Q3')
-        q4_fatigue = get_processed_question_result('Q4')
-        q8_fatigue = get_processed_question_result('Q8')
-        q9_fatigue = get_processed_question_result('Q9')
+        q3_fatigue = cumulative_question_results.get('Q3_result', 0)
+        q4_fatigue = cumulative_question_results.get('Q4_result', 0)
+        q8_fatigue = cumulative_question_results.get('Q8_result', 0)
+        q9_fatigue = cumulative_question_results.get('Q9_result', 0)
         screening_scores['fatigue'] = 1 if (q3_fatigue == 1 or q4_fatigue == 1 or q8_fatigue == 1 or q9_fatigue == 1) else 0
 
         # 문항 5: 입맛 (Q6이 1이면 1)
-        q6_appetite = get_processed_question_result('Q6')
+        q6_appetite = cumulative_question_results.get('Q6_result', 0)
         screening_scores['appetite'] = 1 if q6_appetite == 1 else 0
 
         # 문항 6: 부정적관련 (Text가 optimism이면 0, 아니면 Q1 또는 Q7 중 하나라도 1이면 1)
-        if text_feature == "optimism":
+        if cumulative_feature_scores.get('text_feature') == "optimism":
             screening_scores['negative_thoughts'] = 0
         else:
-            q1_negative = get_processed_question_result('Q1')
-            q7_negative = get_processed_question_result('Q7')
+            q1_negative = cumulative_question_results.get('Q1_result', 0)
+            q7_negative = cumulative_question_results.get('Q7_result', 0)
             screening_scores['negative_thoughts'] = 1 if (q1_negative == 1 or q7_negative == 1) else 0
 
         # 문항 7: 집중력 저하 (Q12 또는 Q13 중 하나라도 1이면 1)
-        q12_concentration = get_processed_question_result('Q12')
-        q13_concentration = get_processed_question_result('Q13')
+        q12_concentration = cumulative_question_results.get('Q12_result', 0)
+        q13_concentration = cumulative_question_results.get('Q13_result', 0)
         screening_scores['concentration'] = 1 if (q12_concentration == 1 or q13_concentration == 1) else 0
 
         # 문항 8: 느려짐 (Q9의 값이 1이면 1)
-        q9_slowness = get_processed_question_result('Q9')
+        q9_slowness = cumulative_question_results.get('Q9_result', 0)
         screening_scores['slowness'] = 1 if q9_slowness == 1 else 0
 
         # 문항 9: 자살사고 (Q15_result가 9이면 1)
-        screening_scores['suicidal_thoughts'] = 1 if Q15_result == 9 else 0
+        screening_scores['suicidal_thoughts'] = 1 if cumulative_feature_scores.get('Q15_result') == 9 else 0
         
         return screening_scores
     
@@ -680,43 +777,54 @@ class LLMIterationTask:
         Returns:
             str: "depressive" 또는 "normal"
         """
-        # Feature 점수 계산
-        image_feature = 0
-        audio_feature = 0
-        text_feature = ""
-        Q15_result = None
+        # 이미 누적된 값이 있는 결과에서 직접 가져오기
+        cumulative_result = None
+        for result in all_results.values():
+            if result.get('status') == 'completed' and 'final_result' in result:
+                cumulative_result = result
+                break
         
-        # 각 질문 세트별로 feature 점수 누적
-        for question_key, result in all_results.items():
-            if result.get('status') == 'completed':
-                feature_scores = result.get('final_result', {}).get('feature_scores', {})
-                image_feature += feature_scores.get('image_feature', 0)
-                audio_feature += feature_scores.get('audio_feature', 0)
-                if not text_feature and feature_scores.get('text_feature'):
-                    text_feature = feature_scores.get('text_feature')
-                if Q15_result is None and feature_scores.get('Q15_result') is not None:
-                    Q15_result = feature_scores.get('Q15_result')
+        if not cumulative_result:
+            return "Typical Range"
         
-        # Image_score와 Audio_score 계산
-        image_score = 1 if image_feature >= 2 else 0
-        audio_score = 1 if audio_feature >= 3 else 0
+        # 이미 누적된 값들 직접 사용
+        final_result = cumulative_result['final_result']
+        cumulative_feature_scores = final_result.get('feature_scores', {})
         
-        # Screening 점수 계산
+        # Image_score와 Audio_score 계산 (누적된 값 사용)
+        image_score = 1 if cumulative_feature_scores.get('image_feature', 0) >= 2 else 0
+        audio_score = 1 if cumulative_feature_scores.get('audio_feature', 0) >= 3 else 0
+        
+        # Screening 점수 계산 (누적된 값 사용)
         screening_scores = self.calculate_screening_scores(all_results)
         screening_total = sum(screening_scores.values())
         
-        # 진단 로직
-        if text_feature == "identification" or Q15_result == 9:
-            return "depressive"
-        elif text_feature == "optimism":
-            return "normal(optimism)"
+        # 진단 로직 (우선순위 순서대로)
+        # 1. text_feature == 'identification' OR Q15_result == 9 → DEPRESSIVE
+        if (cumulative_feature_scores.get('text_feature') == "identification" or 
+            cumulative_feature_scores.get('Q15_result') == 9):
+            return "DEPRESSIVE"
+        
+        # 2. text_feature == 'optimism' → NORMAL(OPTIMISM)
+        elif cumulative_feature_scores.get('text_feature') == "optimism":
+            return "NORMAL(OPTIMISM)"
+        
+        # 3. image_score == 1 AND audio_score == 1 → DEPRESSIVE
         elif image_score == 1 and audio_score == 1:
-            return "depressive"
+            return "DEPRESSIVE"
+        
+        # 4. image_score == 0 AND audio_score == 0 → NORMAL
         elif image_score == 0 and audio_score == 0:
-            return "normal"
+            return "NORMAL"
+        
+        # 5. screening_total ≥ 7 → CLINICAL EVALUATION ADVISED
         elif screening_total >= 7:
-            return "Clinical Evaluation Advised"
+            return "CLINICAL EVALUATION ADVISED"
+        
+        # 6. screening_total ≥ 4 → MONITORING SUGGESTED
         elif screening_total >= 4:
-            return "Monitorning Suggested"
+            return "MONITORING SUGGESTED"
+        
+        # 7. Otherwise → TYPICAL RANGE
         else:
-            return "Typical Range" 
+            return "TYPICAL RANGE" 

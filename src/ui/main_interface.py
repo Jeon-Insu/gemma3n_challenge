@@ -14,6 +14,7 @@ from datetime import datetime
 import json
 import base64
 import subprocess
+import pandas as pd
 from src.app_controller import get_app_controller
 from src.services.llm_iteration_task import LLMIterationTask
 
@@ -38,6 +39,25 @@ class MainInterface:
         self.app_controller = get_app_controller()
         self.screening_task = LLMIterationTask()
         self.initialize_session_state()
+    
+    def check_and_sync_model_state(self):
+        """Check and synchronize model initialization state between session and service"""
+        session_initialized = st.session_state.model_initialized
+        model_info = self.app_controller.get_model_info()
+        service_initialized = model_info.get('initialized', False)
+        
+        # Synchronize states if they're inconsistent
+        if session_initialized and not service_initialized:
+            st.warning("⚠️ Session state says initialized but model service says not ready")
+            st.info("🔄 Synchronizing model state...")
+            st.session_state.model_initialized = False
+            return False
+        elif not session_initialized and service_initialized:
+            st.info("🔄 Model service is ready, updating session state...")
+            st.session_state.model_initialized = True
+            return True
+        
+        return session_initialized and service_initialized
     
     def initialize_session_state(self):
         """Initialize Streamlit session state variables"""
@@ -97,6 +117,18 @@ class MainInterface:
         if 'video_images_dir' not in st.session_state:
             st.session_state.video_images_dir = None
         
+        # File upload tracking
+        if 'uploaded_file_hash' not in st.session_state:
+            st.session_state.uploaded_file_hash = None
+        if 'uploaded_file_time' not in st.session_state:
+            st.session_state.uploaded_file_time = None
+        
+        # Recording tracking
+        if 'recorded_file_size' not in st.session_state:
+            st.session_state.recorded_file_size = None
+        if 'recorded_file_mtime' not in st.session_state:
+            st.session_state.recorded_file_mtime = None
+        
         # Task results
         if 'task_results' not in st.session_state:
             st.session_state.task_results = {}
@@ -111,9 +143,6 @@ class MainInterface:
         
         # Clean up old temporary audio files
         self.cleanup_temp_audio_files()
-        
-        # Create video recording directories
-        self.setup_video_directories()
     
     def cleanup_temp_audio_files(self):
         """Clean up old temporary audio files and video streams"""
@@ -131,7 +160,7 @@ class MainInterface:
                     if current_time - file_path.stat().st_mtime > 3600:
                         file_path.unlink()
             
-            # Clean up old video recordings
+            # Clean up old video recordings (only if directory exists)
             record_dir = Path("./recordings")
             if record_dir.exists():
                 current_time = time.time()
@@ -352,7 +381,7 @@ class MainInterface:
     
     def render_header(self):
         """Render the application header"""
-        st.title("V³-Gemma3n")
+        st.title("V³-Gemma")
 
         st.markdown(
             '<div style="font-size: 18px;">A Multimodal Depression Screener Based on <span style="color: green; font-weight: bold; font-size: 20px;">V</span>isual, <span style="color: green; font-weight: bold; font-size: 20px;">V</span>ocal, and <span style="color: green; font-weight: bold; font-size: 20px;">V</span>erbal Signals</div>', 
@@ -512,16 +541,58 @@ class MainInterface:
         """Render the Screening tab for task execution"""
 
         
-        # Check if video is ready from Task tab
+        # Check if video is ready from Task tab - more flexible approach
         task_session_id = st.session_state.get('task_session_id')
-        video_ready = task_session_id and st.session_state.get(f'video_split_done_{task_session_id}', False)
+        
+        # Check if any video processing is completed
+        video_ready = False
+        user_id = st.session_state.get('user_id', 'default_user')
+        user_record_dir = Path(f"./recordings/{user_id}")
+        
+        if user_record_dir.exists():
+            # Check for any completed video processing
+            audio_dir = user_record_dir / "audio"
+            images_dir = user_record_dir / "images"
+            
+            if audio_dir.exists() and images_dir.exists():
+                # Look for any audio and image files
+                audio_files = list(audio_dir.glob("*.wav"))
+                image_files = list(images_dir.glob("*_frame_0001.png"))
+                
+                if audio_files and image_files:
+                    # Found processed video files
+                    video_ready = True
+                    
+                    # Update session state if needed
+                    if task_session_id and not st.session_state.get(f'video_split_done_{task_session_id}', False):
+                        st.session_state[f'video_split_done_{task_session_id}'] = True
         
         if not video_ready:
             st.warning("⚠️ Please complete video recording/upload in the Task tab first.")
             st.info("👆 Go to the Task tab to record or upload a video for screening.")
+            
+            # Debug information
+            with st.expander("🔍 Debug Information", expanded=False):
+                st.write(f"Task Session ID: {task_session_id}")
+                st.write(f"User record dir exists: {user_record_dir.exists()}")
+                if user_record_dir.exists():
+                    audio_dir = user_record_dir / "audio"
+                    images_dir = user_record_dir / "images"
+                    st.write(f"Audio dir exists: {audio_dir.exists()}")
+                    st.write(f"Images dir exists: {images_dir.exists()}")
+                    
+                    if audio_dir.exists():
+                        audio_files = list(audio_dir.glob("*.wav"))
+                        st.write(f"Audio files found: {len(audio_files)}")
+                    
+                    if images_dir.exists():
+                        image_files = list(images_dir.glob("*_frame_0001.png"))
+                        st.write(f"Image files found: {len(image_files)}")
+            
             return
         
-        if not st.session_state.model_initialized:
+        # Check model initialization status
+        if not self.check_and_sync_model_state():
             st.error("❌ Model not initialized. Please initialize the model in the sidebar first.")
             return
         
@@ -651,12 +722,14 @@ class MainInterface:
         # Setup file paths with user-specific directory
         user_id = st.session_state.get('user_id', 'default_user')
         user_record_dir = Path(f"./recordings/{user_id}")
+        
+        # Don't create directories here - only create when actually needed
         in_file = user_record_dir / f"{prefix}_input.flv"
         audio_output_path = user_record_dir / "audio" / f"{prefix}_audio.wav"
         images_output_dir = user_record_dir / "images"
         
         # Record Video section
-        # Create tabs for recording and upload options
+        # Create tabs for recording and upload options with dark mode support
         st.markdown("""
         <style>
         .stTabs [data-baseweb="tab-list"] {
@@ -665,6 +738,22 @@ class MainInterface:
         .stTabs [data-baseweb="tab"] {
             height: 40px;
             padding: 8px 16px;
+            color: #262730;
+            transition: all 0.3s ease;
+        }
+        
+        /* Dark mode support for video tabs */
+        @media (prefers-color-scheme: dark) {
+            .stTabs [data-baseweb="tab"] {
+                color: #ffffff;
+            }
+        }
+        
+        /* Mobile dark mode detection for video tabs */
+        @media (prefers-color-scheme: dark) and (max-width: 768px) {
+            .stTabs [data-baseweb="tab"] {
+                color: #ffffff;
+            }
         }
         </style>
         """, unsafe_allow_html=True)
@@ -672,6 +761,10 @@ class MainInterface:
         tab1, tab2 = st.tabs(["🎥 Record Video", "📁 Upload MP4"])
         
         with tab1:
+            # Create directories only when video recording starts
+            if not user_record_dir.exists():
+                self.setup_video_directories()
+            
             # Video recorder factory
             def in_recorder_factory():
                 return MediaRecorder(str(in_file), format="flv")
@@ -699,27 +792,55 @@ class MainInterface:
                 sendback_audio=False,  # Disable audio feedback
             )
             
-            # Process video when file exists
-            if in_file.exists() and not st.session_state.get(f'video_split_done_{task_id}', False):
+            # Check if processing is already completed for recorded video
+            audio_path = user_record_dir / "audio" / f"{prefix}_audio.wav"
+            first_image_path = user_record_dir / "images" / f"{prefix}_frame_0001.png"
+            
+            already_processed_recorded = (
+                st.session_state.get(f'video_split_done_{task_id}', False) and
+                audio_path.exists() and
+                first_image_path.exists()
+            )
+            
+            # Process video when file exists and not already processed
+            if in_file.exists() and not already_processed_recorded:
                 try:
+                    # Check if this is a new recording (file size or modification time changed)
+                    file_size = in_file.stat().st_size
+                    file_mtime = in_file.stat().st_mtime
+                    stored_size = st.session_state.get(f'recorded_file_size_{task_id}')
+                    stored_mtime = st.session_state.get(f'recorded_file_mtime_{task_id}')
+                    
+                    is_new_recording = (stored_size != file_size or 
+                                      stored_mtime != file_mtime or 
+                                      stored_size is None)
+                    
+                    if is_new_recording:
+                        st.session_state[f'recorded_file_size_{task_id}'] = file_size
+                        st.session_state[f'recorded_file_mtime_{task_id}'] = file_mtime
+                        st.success("🔄 New recording detected! Processing...")
+                    elif already_processed_recorded:
+                        st.success("✅ Recording already processed! Ready for screening.")
+                    
                     # Processing video silently
-                        self.wait_for_file_complete(in_file)
+                    self.wait_for_file_complete(in_file)
+                    
+                    success = self.split_flv_to_audio_and_images(
+                        flv_path=str(in_file),
+                        audio_output_path=str(audio_output_path),
+                        images_output_dir=images_output_dir,
+                        prefix=prefix
+                    )
+                    
+                    if success:
+                        st.session_state[f'video_split_done_{task_id}'] = True
+                        st.session_state[f'recorded_video_path_{task_id}'] = str(in_file)
+                        st.session_state[f'video_audio_path_{task_id}'] = str(audio_output_path)
+                        st.session_state[f'video_images_dir_{task_id}'] = str(images_output_dir)
+                        st.session_state[f'file_name_{task_id}'] = f"recorded_video_{task_id[:8]}.flv"
                         
-                        success = self.split_flv_to_audio_and_images(
-                            flv_path=str(in_file),
-                            audio_output_path=str(audio_output_path),
-                            images_output_dir=images_output_dir,
-                            prefix=prefix
-                        )
+                        # Video processing completed - no additional logs needed
                         
-                        if success:
-                            st.session_state[f'video_split_done_{task_id}'] = True
-                            st.session_state[f'recorded_video_path_{task_id}'] = str(in_file)
-                            st.session_state[f'video_audio_path_{task_id}'] = str(audio_output_path)
-                            st.session_state[f'video_images_dir_{task_id}'] = str(images_output_dir)
-                            
-                            # Video processing completed - no additional logs needed
-                            
                 except Exception as e:
                     st.error(f"❌ Error processing video: {str(e)}")
             
@@ -734,25 +855,100 @@ class MainInterface:
                     )
         
         with tab2:
-            uploaded_file = st.file_uploader(
-                "Choose an MP4 file",
-                type=['mp4'],
-                key=f"mp4_upload_{task_id}",
-                help="Upload an MP4 video file (max 100MB)"
-            )
+            # Add reset button for new file upload
+            col1, col2, col3 = st.columns([2, 1, 2])
+            with col1:
+                uploaded_file = st.file_uploader(
+                    "Choose an MP4 file",
+                    type=['mp4'],
+                    key=f"mp4_upload_{task_id}",
+                    help="Upload an MP4 video file (max 100MB)"
+                )
+            with col2:
+                st.markdown("<br>", unsafe_allow_html=True)  # Add some spacing
+                if st.button("🔄 New File", help="Reset for new file upload", type="secondary", use_container_width=True):
+                    # Generate new task ID for new file
+                    new_task_id = str(uuid.uuid4())
+                    st.session_state.task_session_id = new_task_id
+                    
+                    # Generate new prefix for new session
+                    new_prefix = str(uuid.uuid4())
+                    st.session_state[f'video_prefix_{new_task_id}'] = new_prefix
+                    
+                    # Reset processing state for new file
+                    st.session_state[f'video_split_done_{new_task_id}'] = False
+                    st.session_state[f'uploaded_file_hash_{new_task_id}'] = None
+                    st.session_state[f'uploaded_file_time_{new_task_id}'] = None
+                    st.session_state[f'file_name_{new_task_id}'] = None
+                    
+                    # Create new recording directory
+                    user_id = st.session_state.get('user_id', 'default_user')
+                    new_user_record_dir = Path(f"./recordings/{user_id}")
+                    if not new_user_record_dir.exists():
+                        self.setup_video_directories()
+                    
+                    st.success(f"🔄 New session created! Ready for new file upload.")
+                    st.rerun()
+            with col3:
+                st.empty()  # Empty column for balance
             
             if uploaded_file is not None:
                 try:
-                    # Save uploaded MP4 file
+                    # Create directories only when file is actually uploaded
+                    if not user_record_dir.exists():
+                        self.setup_video_directories()
+                    
+                    # Calculate file hash for change detection
+                    import hashlib
+                    file_content = uploaded_file.getvalue()
+                    file_hash = hashlib.md5(file_content).hexdigest()
+                    current_time = time.time()
+                    
+                    # Check if this is a new file (different hash or time)
+                    stored_hash = st.session_state.get(f'uploaded_file_hash_{task_id}')
+                    stored_time = st.session_state.get(f'uploaded_file_time_{task_id}')
+                    
+                    is_new_file = (stored_hash != file_hash or 
+                                 stored_time is None or 
+                                 current_time - stored_time > 1)  # 1초 이상 차이나면 새 파일
+                    
+                    # Check if processing is already completed (both state and files exist)
+                    flv_path = user_record_dir / f"{prefix}_converted.flv"
+                    audio_path = user_record_dir / "audio" / f"{prefix}_audio.wav"
+                    first_image_path = user_record_dir / "images" / f"{prefix}_frame_0001.png"
+                    
+                    already_processed = (
+                        st.session_state.get(f'video_split_done_{task_id}', False) and
+                        flv_path.exists() and
+                        audio_path.exists() and
+                        first_image_path.exists()
+                    )
+                    
+                    # Only process if it's a new file and not already processed
+                    should_process = is_new_file and not already_processed
+                    
+                    # If new file, reset processing state and save filename
+                    if is_new_file:
+                        st.session_state[f'video_split_done_{task_id}'] = False
+                        st.session_state[f'uploaded_file_hash_{task_id}'] = file_hash
+                        st.session_state[f'uploaded_file_time_{task_id}'] = current_time
+                        st.session_state[f'file_name_{task_id}'] = uploaded_file.name
+                        st.success("🔄 New file detected! Processing...")
+                    elif already_processed:
+                        st.success("✅ Video already processed! Ready for screening.")
+                    
+                    # Save uploaded MP4 file only if it's new or not already saved
                     mp4_path = user_record_dir / f"{prefix}_uploaded.mp4"
-                    with open(mp4_path, "wb") as f:
-                        f.write(uploaded_file.getvalue())
+                    if is_new_file or not mp4_path.exists():
+                        with open(mp4_path, "wb") as f:
+                            f.write(file_content)
                     
-                    # MP4 file uploaded - no additional logs needed
-                    
-                    # Process uploaded MP4 file
-                    if not st.session_state.get(f'video_split_done_{task_id}', False):
-                        # Processing video silently
+                    # Process uploaded MP4 file only if it's a new file
+                    if should_process:
+                        # Show processing status
+                        with st.status("🔄 Processing video...", expanded=True) as status:
+                            st.write("Converting MP4 to FLV...")
+                            
                             # Convert MP4 to FLV for processing
                             flv_path = user_record_dir / f"{prefix}_converted.flv"
                             
@@ -770,18 +966,19 @@ class MainInterface:
                                     st.error("❌ Cannot read MP4 file. Please check if the file is valid.")
                                     return
                                 
-                                # Convert MP4 to FLV with more compatible settings
+                                # Convert MP4 to FLV with optimized settings for speed
                                 convert_cmd = [
                                     'ffmpeg', '-i', str(mp4_path), 
-                                    '-c:v', 'libx264', '-preset', 'fast',
-                                    '-c:a', 'aac', '-b:a', '128k',
+                                    '-c:v', 'copy',  # Copy video stream without re-encoding
+                                    '-c:a', 'copy',  # Copy audio stream without re-encoding
                                     '-f', 'flv', str(flv_path)
                                 ]
                                 
-                                result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=120)
+                                result = subprocess.run(convert_cmd, capture_output=True, text=True, timeout=60)
                                 
                                 if result.returncode == 0:
-                                # MP4 converted to FLV successfully - no additional logs needed
+                                    st.write("✅ MP4 to FLV conversion completed!")
+                                    st.write("Extracting audio and images...")
                                     
                                     # Process the converted FLV file
                                     success = self.split_flv_to_audio_and_images(
@@ -797,11 +994,46 @@ class MainInterface:
                                         st.session_state[f'video_audio_path_{task_id}'] = str(audio_output_path)
                                         st.session_state[f'video_images_dir_{task_id}'] = str(images_output_dir)
                                         
+                                        status.update(label="✅ Video processing completed!", state="complete")
+                                        st.success("✅ Video processing completed! You can now proceed to Screening.")
+                                    
                                     # Uploaded video processing completed - no additional logs needed
                                     
                                 else:
-                                    st.error(f"❌ Error converting MP4 to FLV: {result.stderr}")
-                                    st.info("💡 Try with a different MP4 file or check if the file is corrupted.")
+                                    # Try fallback conversion with re-encoding if copy fails
+                                    st.warning("⚠️ Fast conversion failed, trying with re-encoding...")
+                                    fallback_cmd = [
+                                        'ffmpeg', '-i', str(mp4_path), 
+                                        '-c:v', 'libx264', '-preset', 'ultrafast',
+                                        '-c:a', 'aac', '-b:a', '128k',
+                                        '-f', 'flv', str(flv_path)
+                                    ]
+                                    
+                                    fallback_result = subprocess.run(fallback_cmd, capture_output=True, text=True, timeout=120)
+                                    
+                                    if fallback_result.returncode == 0:
+                                        st.write("✅ MP4 to FLV conversion completed (fallback)!")
+                                        st.write("Extracting audio and images...")
+                                        
+                                        # Process the converted FLV file
+                                        success = self.split_flv_to_audio_and_images(
+                                            flv_path=str(flv_path),
+                                            audio_output_path=str(audio_output_path),
+                                            images_output_dir=images_output_dir,
+                                            prefix=prefix
+                                        )
+                                        
+                                        if success:
+                                            st.session_state[f'video_split_done_{task_id}'] = True
+                                            st.session_state[f'recorded_video_path_{task_id}'] = str(flv_path)
+                                            st.session_state[f'video_audio_path_{task_id}'] = str(audio_output_path)
+                                            st.session_state[f'video_images_dir_{task_id}'] = str(images_output_dir)
+                                            
+                                            status.update(label="✅ Video processing completed!", state="complete")
+                                            st.success("✅ Video processing completed! You can now proceed to Screening.")
+                                    else:
+                                        st.error(f"❌ Error converting MP4 to FLV: {fallback_result.stderr}")
+                                        st.info("💡 Try with a different MP4 file or check if the file is corrupted.")
                                     
                             except subprocess.TimeoutExpired:
                                 st.error("❌ Video conversion timed out. Please try with a shorter video.")
@@ -850,7 +1082,7 @@ class MainInterface:
                 
                 # Update progress for multiple prompts
                 if total_prompts > 1:
-                    progress = (prompt_idx + 1) / total_prompts
+                    progress = min((prompt_idx + 1) / total_prompts, 1.0)
                     progress_container.progress(progress, text=f"Processing prompt {prompt_idx + 1}/{total_prompts}")
                     status_container.info(f"🔄 Executing prompt {prompt_idx + 1}: {prompt_text[:50]}...")
                 
@@ -1042,7 +1274,7 @@ class MainInterface:
             
             # Get task parameters
             question_keys = task.get('question_keys', ['Q1'])
-            nI = task.get('nI', 5)
+            nI = task.get('nI', 1)
             
             # Check if question keys are set
             if not question_keys:
@@ -1080,17 +1312,70 @@ class MainInterface:
                 
                 # Combine all results
                 if all_results:
-                    # Use the first result as base and combine logs
+                    # Initialize cumulative results
+                    cumulative_question_results = {
+                        "Q1_result": 0, "Q2_result": 0, "Q3_result": 0, "Q4_result": 0, "Q5_result": 0,
+                        "Q6_result": 0, "Q7_result": 0, "Q8_result": 0, "Q9_result": 0, "Q10_result": 0,
+                        "Q11_result": 0, "Q12_result": 0, "Q13_result": 0
+                    }
+                    total_text_feature = ""
+                    total_Q15_result = None
+                    
+                    # Accumulate individual question results from all question sets
+                    for result_item in all_results:
+                        if 'final_result' in result_item:
+                            final_result = result_item['final_result']
+                            question_results = final_result.get('question_results', {})
+                            
+                            # Accumulate individual question results
+                            for q_key, q_value in question_results.items():
+                                if q_value == 1:  # Only accumulate positive results (1)
+                                    cumulative_question_results[q_key] = 1
+                            
+                            # Update text_feature (Q14에서만 설정)
+                            if final_result.get('text_feature'):
+                                total_text_feature = final_result.get('text_feature')
+                            
+                            # Update Q15_result (Q15에서만 설정)
+                            if final_result.get('Q15_result') is not None:
+                                total_Q15_result = final_result.get('Q15_result')
+                    
+                    # Calculate final feature scores from accumulated question results
+                    final_image_feature = (cumulative_question_results["Q1_result"] - 
+                                          cumulative_question_results["Q2_result"] + 
+                                          cumulative_question_results["Q3_result"] + 
+                                          cumulative_question_results["Q4_result"] + 
+                                          cumulative_question_results["Q5_result"])
+                    
+                    final_audio_feature = (cumulative_question_results["Q8_result"] + 
+                                          cumulative_question_results["Q9_result"] - 
+                                          cumulative_question_results["Q10_result"] + 
+                                          cumulative_question_results["Q11_result"] + 
+                                          cumulative_question_results["Q12_result"])
+                    
+                    # Use the first result as base and update with cumulative data
                     combined_result = all_results[0].copy()
                     combined_result['log'] = all_logs
                     combined_result['question_keys'] = question_keys
                     combined_result['total_question_sets'] = len(question_keys)
                     
-                    # Update final result with combined data
+                    # Update final result with cumulative data
                     if 'final_result' in combined_result:
                         final_result = combined_result['final_result']
                         final_result['total_question_sets'] = len(question_keys)
                         final_result['processed_question_keys'] = question_keys
+                        
+                        # Add feature_scores with calculated values
+                        final_result['feature_scores'] = {
+                            'image_feature': final_image_feature,
+                            'audio_feature': final_audio_feature,
+                            'text_feature': total_text_feature,
+                            'Q15_result': total_Q15_result
+                        }
+                        
+                        # Update question results with cumulative values
+                        if 'question_results' in final_result:
+                            final_result['question_results'].update(cumulative_question_results)
                     
                     result = combined_result
                 else:
@@ -1227,6 +1512,11 @@ class MainInterface:
             st.error("No tasks to execute!")
             return
         
+        # Check model initialization status
+        if not self.check_and_sync_model_state():
+            st.error("❌ Model not initialized. Please initialize the model in the sidebar first.")
+            return
+        
         if not self.app_controller.is_model_ready():
             st.error("❌ Model not initialized. Please initialize the model in the sidebar first.")
             return
@@ -1245,7 +1535,7 @@ class MainInterface:
                 task_id = task['id']
                 
                 # Update progress
-                progress = (i + 1) / total_tasks
+                progress = min((i + 1) / total_tasks, 1.0)
                 progress_container.progress(progress, text=f"Executing Task {i + 1}/{total_tasks}: {task['name']}")
                 status_container.info(f"🔄 Processing: {task['name']}")
                 
@@ -1272,7 +1562,9 @@ class MainInterface:
             
             total_time = time.time() - start_time
             st.success(f"✅ Successfully executed {total_tasks} tasks in {total_time:.1f} seconds!")
-            st.rerun()
+            
+            # Don't rerun to avoid re-processing video files
+            # st.rerun()
             
         except Exception as e:
             st.session_state.processing_task_id = None
@@ -1682,7 +1974,7 @@ class MainInterface:
                         
                         # Memory usage bar
                         usage_percent = memory_info.get('memory_usage_percent', 0)
-                        st.progress(usage_percent / 100, text=f"Usage: {usage_percent:.1f}%")
+                        st.progress(min(usage_percent / 100, 1.0), text=f"Usage: {usage_percent:.1f}%")
                         
                         # Force cleanup button
                         if st.button("🧹 Force GPU Cleanup", type="secondary", use_container_width=True, key="sidebar_force_gpu_cleanup_btn"):
@@ -1797,7 +2089,9 @@ class MainInterface:
                 task_name = result_data.get('task_name', 'Default Screening')
                 task_id = result_data.get('task_id', 0)
                 
-                with st.expander(f"{task_name} (Task ID: {task_id})", expanded=False):
+                # Get filename for display
+                file_name = st.session_state.get(f'file_name_{task_id}', f"Task_{task_id[:8]}")
+                with st.expander(f"{task_name} ({file_name})", expanded=False):
                     # Task completion status
                     st.success("✅ Task completed successfully")
                     
@@ -1826,6 +2120,19 @@ class MainInterface:
                             screening_task = LLMIterationTask()
                             screening_scores = screening_task.calculate_screening_scores(all_results)
                             diagnosis = screening_task.calculate_diagnosis(all_results)
+                            
+                            # Debug: Print diagnosis and data for comparison
+                            print(f"🔍 Debug: Results tab - diagnosis: {diagnosis}")
+                            print(f"🔍 Debug: Results tab - screening_scores: {screening_scores}")
+                            print(f"🔍 Debug: Results tab - all_results keys: {list(all_results.keys())}")
+                            
+                            # Get cumulative results for debug
+                            for result in all_results.values():
+                                if result.get('status') == 'completed' and 'final_result' in result:
+                                    final_result = result['final_result']
+                                    feature_scores = final_result.get('feature_scores', {})
+                                    print(f"🔍 Debug: Results tab - feature_scores: {feature_scores}")
+                                    break
                             
                             # Display Screening Scores in separate expander
                             with st.expander("🧠 Screening Assessment", expanded=False):
@@ -1873,6 +2180,89 @@ class MainInterface:
                             st.markdown("---")
                             screening_total = sum(screening_scores.values())
                             st.markdown(f"**📊 Screening Total Score: {screening_total}/9**", help=f"Total score: {screening_total} out of 9")
+                            
+                            # Display Cumulative Question Results
+                            st.markdown("---")
+                            st.markdown("#### 📋 Cumulative Question Results (Q1-Q15)")
+                            
+                            # Get cumulative results from any completed result
+                            cumulative_question_results = {}
+                            cumulative_feature_scores = {}
+                            for result in all_results.values():
+                                if result.get('status') == 'completed' and 'final_result' in result:
+                                    final_result = result['final_result']
+                                    cumulative_question_results = final_result.get('question_results', {})
+                                    cumulative_feature_scores = final_result.get('feature_scores', {})
+                                    break
+                            
+                            # Display Q1-Q13 results in 3-column layout
+                            col1, col2, col3 = st.columns(3)
+                            
+                            for i in range(1, 14):  # Q1 to Q13
+                                q_key = f"Q{i}_result"
+                                q_value = cumulative_question_results.get(q_key, 0)
+                                
+                                # Choose column based on index
+                                if i <= 4:
+                                    with col1:
+                                        if q_value == 1:
+                                            st.markdown(f"🔴 **Q{i}:** {q_value}")
+                                        else:
+                                            st.markdown(f"🟢 **Q{i}:** {q_value}")
+                                elif i <= 8:
+                                    with col2:
+                                        if q_value == 1:
+                                            st.markdown(f"🔴 **Q{i}:** {q_value}")
+                                        else:
+                                            st.markdown(f"🟢 **Q{i}:** {q_value}")
+                                else:
+                                    with col3:
+                                        if q_value == 1:
+                                            st.markdown(f"🔴 **Q{i}:** {q_value}")
+                                        else:
+                                            st.markdown(f"🟢 **Q{i}:** {q_value}")
+                            
+                            # Display Q14 (text_feature) and Q15 separately
+                            st.markdown("---")
+                            st.markdown("#### 🎭 Special Results")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                text_feature = cumulative_feature_scores.get('text_feature', 'N/A')
+                                st.markdown(f"**Q14 (Text Feature):** {text_feature}")
+                            
+                            with col2:
+                                q15_result = cumulative_feature_scores.get('Q15_result', 'N/A')
+                                st.markdown(f"**Q15 Result:** {q15_result}")
+                            
+                            # Display Feature Scores
+                            st.markdown("---")
+                            st.markdown("#### 🧮 Feature Scores")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                image_feature = cumulative_feature_scores.get('image_feature', 0)
+                                st.markdown(f"**Image Feature:** {image_feature}")
+                            
+                            with col2:
+                                audio_feature = cumulative_feature_scores.get('audio_feature', 0)
+                                st.markdown(f"**Audio Feature:** {audio_feature}")
+                            
+                            # Display Diagnosis
+                            st.markdown("---")
+                            st.markdown("#### 🎯 Final Diagnosis")
+                            st.markdown(f"**Diagnosis:** {diagnosis.upper()}")
+                            
+                            # Show diagnosis logic
+                            with st.expander("🔍 Diagnosis Logic Details", expanded=False):
+                                st.markdown("**Diagnosis Priority Logic:**")
+                                st.markdown("1. **text_feature == 'identification' OR Q15_result == 9** → **DEPRESSIVE**")
+                                st.markdown("2. **text_feature == 'optimism'** → **NORMAL(OPTIMISM)**")
+                                st.markdown("3. **image_score == 1 AND audio_score == 1** → **DEPRESSIVE**")
+                                st.markdown("4. **image_score == 0 AND audio_score == 0** → **NORMAL**")
+                                st.markdown("5. **screening_total >= 7** → **CLINICAL EVALUATION ADVISED**")
+                                st.markdown("6. **screening_total >= 4** → **MONITORING SUGGESTED**")
+                                st.markdown("7. **Otherwise** → **TYPICAL RANGE**")
                     
 
         
@@ -2398,7 +2788,7 @@ class MainInterface:
         self.render_model_initialization()
         
         # Main content with tabs
-        # Custom CSS to make tabs larger and more prominent
+        # Custom CSS to make tabs larger and more prominent with dark mode support
         st.markdown("""
         <style>
         .stTabs [data-baseweb="tab-list"] {
@@ -2411,16 +2801,81 @@ class MainInterface:
             border-radius: 8px 8px 0px 0px;
             font-size: 18px;
             font-weight: 600;
+            color: #262730;
+            transition: all 0.3s ease;
         }
         .stTabs [aria-selected="true"] {
             background-color: #ffffff;
             border-bottom: 3px solid #ff6b6b;
+            color: #262730;
         }
+        
+        /* Dark mode support */
+        @media (prefers-color-scheme: dark) {
+            .stTabs [data-baseweb="tab"] {
+                background-color: #262730;
+                color: #ffffff;
+            }
+            .stTabs [aria-selected="true"] {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                border-bottom: 3px solid #ff6b6b;
+            }
+        }
+        
+        /* Mobile dark mode detection */
+        @media (prefers-color-scheme: dark) and (max-width: 768px) {
+            .stTabs [data-baseweb="tab"] {
+                background-color: #262730;
+                color: #ffffff;
+            }
+            .stTabs [aria-selected="true"] {
+                background-color: #1e1e1e;
+                color: #ffffff;
+                border-bottom: 3px solid #ff6b6b;
+            }
+        }
+        
+        /* JavaScript-based dark mode detection */
         </style>
+        <script>
+        function updateTabColors() {
+            const isDarkMode = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            const tabs = document.querySelectorAll('.stTabs [data-baseweb="tab"]');
+            
+            tabs.forEach(tab => {
+                if (isDarkMode) {
+                    tab.style.color = '#ffffff';
+                    if (tab.getAttribute('aria-selected') === 'true') {
+                        tab.style.backgroundColor = '#1e1e1e';
+                    } else {
+                        tab.style.backgroundColor = '#262730';
+                    }
+                } else {
+                    tab.style.color = '#262730';
+                    if (tab.getAttribute('aria-selected') === 'true') {
+                        tab.style.backgroundColor = '#ffffff';
+                    } else {
+                        tab.style.backgroundColor = '#f0f2f6';
+                    }
+                }
+            });
+        }
+        
+        // Initial call
+        updateTabColors();
+        
+        // Listen for changes
+        window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', updateTabColors);
+        
+        // Update on page load and resize
+        window.addEventListener('load', updateTabColors);
+        window.addEventListener('resize', updateTabColors);
+        </script>
         """, unsafe_allow_html=True)
         
         # Create tabs with larger size
-        tab1, tab2, tab3 = st.tabs(["📋 Task", "Screening", "📊 Results"])
+        tab1, tab2, tab3, tab4 = st.tabs(["📋 Task", "Screening", "📊 Results", "📈 Reporting"])
         
         with tab1:
             self.render_task_tab()
@@ -2430,6 +2885,9 @@ class MainInterface:
         
         with tab3:
             self.render_results_tab()
+            
+        with tab4:
+            self.render_reporting_tab()
     
 
     
@@ -2739,10 +3197,229 @@ class MainInterface:
                 mime="text/plain"
             )
             
+            # Add Excel export button
+            self.export_results_as_excel()
+            
+            # Add CSV export button
+            self.export_results_as_csv()
+            
+            
         except Exception as e:
             st.error(f"Failed to export text: {str(e)}")
     
-
+    def export_results_as_excel(self):
+        """Export results as Excel file with ID and detailed results"""
+        try:
+            if not st.session_state.task_results:
+                st.error("No results to export!")
+                return
+            
+            # Generate unique ID for this session
+            session_id = st.session_state.get('task_session_id', str(uuid.uuid4()))
+            user_id = st.session_state.get('user_id', 'default_user')
+            
+            # Collect all question results
+            all_results = {}
+            for result_key, result_data in st.session_state.task_results.items():
+                if result_data.get('status') == 'completed' and 'question_key' in result_data:
+                    question_key = result_data['question_key']
+                    all_results[question_key] = result_data
+            
+            # Calculate screening scores
+            from src.services.llm_iteration_task import LLMIterationTask
+            screening_task = LLMIterationTask()
+            screening_scores = screening_task.calculate_screening_scores(all_results)
+            diagnosis = screening_task.calculate_diagnosis(all_results)
+            
+            # Get cumulative results from any completed result (same as screen display)
+            cumulative_question_results = {}
+            cumulative_feature_scores = {}
+            for result in all_results.values():
+                if result.get('status') == 'completed' and 'final_result' in result:
+                    final_result = result['final_result']
+                    cumulative_question_results = final_result.get('question_results', {})
+                    cumulative_feature_scores = final_result.get('feature_scores', {})
+                    break
+            
+            # Get filename for this session
+            file_name = st.session_state.get(f'file_name_{session_id}', f"Task_{session_id[:8]}")
+            
+            # Create data for Excel
+            data = {
+                'Session_ID': [session_id],
+                'File_Name': [file_name],
+                'User_ID': [user_id],
+                'Timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'Screening_Total_Score': [sum(screening_scores.values())],
+                'Diagnosis': [diagnosis],
+                '🧠 Screening Assessment': [diagnosis]
+            }
+            
+            # Add screening scores (9 items) - same as screen display
+            screening_items = [
+                ("Interest_Loss", "interest_loss"),
+                ("Depression", "depression"), 
+                ("Sleep", "sleep"),
+                ("Fatigue", "fatigue"),
+                ("Appetite", "appetite"),
+                ("Negative_Thoughts", "negative_thoughts"),
+                ("Concentration", "concentration"),
+                ("Slowness", "slowness"),
+                ("Suicidal_Thoughts", "suicidal_thoughts")
+            ]
+            
+            for item_name, item_key in screening_items:
+                data[item_name] = [screening_scores.get(item_key, 0)]
+            
+            # Add individual question results (Q1-Q13) - same as screen display
+            for i in range(1, 14):
+                q_key = f"Q{i}_result"
+                q_value = cumulative_question_results.get(q_key, 0)
+                data[f'Q{i}'] = [q_value]
+            
+            # Add special results - same as screen display
+            text_feature = cumulative_feature_scores.get('text_feature', 'N/A')
+            q15_result = cumulative_feature_scores.get('Q15_result', 'N/A')
+            
+            data['Q14_Text_Feature'] = [text_feature]
+            data['Q15_Result'] = [q15_result]
+            
+            # Add feature scores - same as screen display
+            image_feature = cumulative_feature_scores.get('image_feature', 0)
+            audio_feature = cumulative_feature_scores.get('audio_feature', 0)
+            
+            data['Image_Feature'] = [image_feature]
+            data['Audio_Feature'] = [audio_feature]
+            
+            # Create DataFrame
+            df = pd.DataFrame(data)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"screening_results_{session_id[:8]}_{timestamp}.xlsx"
+            
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Screening_Results', index=False)
+            
+            output.seek(0)
+            
+            # Create download button
+            st.download_button(
+                label="📊 Download Results as Excel",
+                data=output.getvalue(),
+                file_name=filename,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+            
+        except Exception as e:
+            st.error(f"Failed to export results as Excel: {str(e)}")
+    
+    def export_results_as_csv(self):
+        """Export results as CSV file with ID and detailed results"""
+        try:
+            if not st.session_state.task_results:
+                st.error("No results to export!")
+                return
+            
+            # Generate unique ID for this session
+            session_id = st.session_state.get('task_session_id', str(uuid.uuid4()))
+            user_id = st.session_state.get('user_id', 'default_user')
+            
+            # Collect all question results
+            all_results = {}
+            for result_key, result_data in st.session_state.task_results.items():
+                if result_data.get('status') == 'completed' and 'question_key' in result_data:
+                    question_key = result_data['question_key']
+                    all_results[question_key] = result_data
+            
+            # Calculate screening scores
+            from src.services.llm_iteration_task import LLMIterationTask
+            screening_task = LLMIterationTask()
+            screening_scores = screening_task.calculate_screening_scores(all_results)
+            diagnosis = screening_task.calculate_diagnosis(all_results)
+            
+            # Get cumulative results from any completed result (same as screen display)
+            cumulative_question_results = {}
+            cumulative_feature_scores = {}
+            for result in all_results.values():
+                if result.get('status') == 'completed' and 'final_result' in result:
+                    final_result = result['final_result']
+                    cumulative_question_results = final_result.get('question_results', {})
+                    cumulative_feature_scores = final_result.get('feature_scores', {})
+                    break
+            
+            # Get filename for this session
+            file_name = st.session_state.get(f'file_name_{session_id}', f"Task_{session_id[:8]}")
+            
+            # Create data for CSV
+            data = {
+                'Session_ID': [session_id],
+                'File_Name': [file_name],
+                'User_ID': [user_id],
+                'Timestamp': [datetime.now().strftime('%Y-%m-%d %H:%M:%S')],
+                'Screening_Total_Score': [sum(screening_scores.values())],
+                'Diagnosis': [diagnosis],
+                '🧠 Screening Assessment': [diagnosis]
+            }
+            
+            # Add screening scores (9 items) - same as screen display
+            screening_items = [
+                ("Interest_Loss", "interest_loss"),
+                ("Depression", "depression"), 
+                ("Sleep", "sleep"),
+                ("Fatigue", "fatigue"),
+                ("Appetite", "appetite"),
+                ("Negative_Thoughts", "negative_thoughts"),
+                ("Concentration", "concentration"),
+                ("Slowness", "slowness"),
+                ("Suicidal_Thoughts", "suicidal_thoughts")
+            ]
+            
+            for item_name, item_key in screening_items:
+                data[item_name] = [screening_scores.get(item_key, 0)]
+            
+            # Add individual question results (Q1-Q13) - same as screen display
+            for i in range(1, 14):
+                q_key = f"Q{i}_result"
+                q_value = cumulative_question_results.get(q_key, 0)
+                data[f'Q{i}'] = [q_value]
+            
+            # Add special results - same as screen display
+            text_feature = cumulative_feature_scores.get('text_feature', 'N/A')
+            q15_result = cumulative_feature_scores.get('Q15_result', 'N/A')
+            
+            data['Q14_Text_Feature'] = [text_feature]
+            data['Q15_Result'] = [q15_result]
+            
+            # Add feature scores - same as screen display
+            image_feature = cumulative_feature_scores.get('image_feature', 0)
+            audio_feature = cumulative_feature_scores.get('audio_feature', 0)
+            
+            data['Image_Feature'] = [image_feature]
+            data['Audio_Feature'] = [audio_feature]
+            
+            # Create DataFrame
+            df = pd.DataFrame(data)
+            
+            # Generate filename with timestamp
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"screening_results_{session_id[:8]}_{timestamp}.csv"
+            
+            # Create CSV file in memory
+            csv_data = df.to_csv(index=False)
+            
+            # Create download button
+            st.download_button(
+                label="📄 Download Results as CSV",
+                data=csv_data,
+                file_name=filename,
+                mime="text/csv"
+            )
+            
+        except Exception as e:
+            st.error(f"Failed to export results as CSV: {str(e)}")
     
     def execute_all_tasks(self):
         """Execute all tasks in sequence"""
@@ -2765,7 +3442,7 @@ class MainInterface:
                 task_id = task['id']
                 
                 # Update progress
-                progress = (i + 1) / total_tasks
+                progress = min((i + 1) / total_tasks, 1.0)
                 progress_bar.progress(progress)
                 status_text.text(f"Executing task {i + 1}/{total_tasks}: {task['name']}")
                 
@@ -2948,21 +3625,28 @@ class MainInterface:
                 help="Choose the Gemma model variant to use"
             )
             
-            # Model status
-            if st.session_state.model_initialized:
+            # Model status - check and sync model state
+            model_ready = self.check_and_sync_model_state()
+            model_info = self.app_controller.get_model_info()
+            
+            # Display status
+            if model_ready:
                 st.success("🟢 Model Ready")
-                model_info = self.app_controller.get_model_info()
-                if model_info.get('initialized'):
-                    st.info(f"📍 Current: {model_info.get('model_path', 'Unknown')}")
-                    st.info(f"🖥️ Device: {model_info.get('device', 'Unknown')}")
+                st.info(f"📍 Current: {model_info.get('model_path', 'Unknown')}")
+                st.info(f"🖥️ Device: {model_info.get('device', 'Unknown')}")
             else:
                 st.error("🔴 Model Not Loaded")
+            
+            # Debug info
+            with st.expander("🔍 Debug Info", expanded=False):
+                st.write(f"Session State: {st.session_state.model_initialized}")
+                st.write(f"Model Info: {self.app_controller.get_model_info()}")
             
             # Model control buttons
             col1, col2 = st.columns(2)
             
             with col1:
-                if st.button("🚀 Initialize", use_container_width=True, disabled=st.session_state.model_initialized):
+                if st.button("🚀 Initialize", use_container_width=True, disabled=model_ready):
                     with st.spinner("Initializing model..."):
                         success = self.app_controller.initialize_model(selected_model)
                         if success:
@@ -2973,7 +3657,7 @@ class MainInterface:
                             st.error("❌ Model initialization failed!")
             
             with col2:
-                if st.button("🔄 Reset", use_container_width=True, disabled=not st.session_state.model_initialized):
+                if st.button("🔄 Reset", use_container_width=True, disabled=not model_ready):
                     with st.spinner("Resetting model..."):
                         success = self.app_controller.reset_model()
                         if success:
@@ -2993,7 +3677,7 @@ class MainInterface:
                 # Memory usage bar
                 usage_percent = memory_info.get('memory_usage_percent', 0)
                 st.metric("Memory Usage", f"{usage_percent}%")
-                st.progress(usage_percent / 100)
+                st.progress(min(usage_percent / 100, 1.0))
                 
                 # Detailed memory info
                 with st.expander("📊 Memory Details"):
@@ -3045,3 +3729,738 @@ class MainInterface:
                 st.success("🟢 Screening Active")
             else:
                 st.info("⚪ Screening Inactive")
+
+    def render_reporting_tab(self):
+        """Render the Reporting tab with detailed analysis and user-friendly reports"""
+        
+        # Check if any tasks have been executed
+        if not st.session_state.task_results:
+            st.info("No results yet. Execute tasks in the Screening tab to see reports here.")
+            return
+        
+        # Check if all question sets (Q1-Q15) are completed - same logic as Results tab
+        required_question_keys = [f"Q{i}" for i in range(1, 16)]  # Q1 to Q15
+        available_results = []
+        
+        for result_key, result_data in st.session_state.task_results.items():
+            if result_data.get('status') == 'completed' and 'final_result' in result_data:
+                question_key = result_data.get('question_key')
+                if question_key in required_question_keys:
+                    available_results.append(question_key)
+        
+        # If we don't have individual Q results, check if we have a single comprehensive result
+        if len(available_results) < 15:
+            # Check if we have a comprehensive screening result (like in Results tab)
+            comprehensive_results = []
+            for result_key, result_data in st.session_state.task_results.items():
+                if (result_data.get('status') == 'completed' and 
+                    'final_result' in result_data and 
+                    'question_results' in result_data['final_result']):
+                    comprehensive_results.append(result_key)
+            
+            if comprehensive_results:
+                # We have comprehensive results, proceed with analysis
+                pass
+            else:
+                st.warning(f"⚠️ Incomplete results. Need all 15 questions (Q1-Q15). Currently have: {len(available_results)}/15")
+                return
+        
+        # Collect all results for analysis - same logic as Results tab
+        all_results = {}
+        for result_key, result_data in st.session_state.task_results.items():
+            if result_data.get('status') == 'completed' and 'question_key' in result_data:
+                question_key = result_data['question_key']
+                all_results[question_key] = result_data
+        
+        # Calculate screening scores
+        from src.services.llm_iteration_task import LLMIterationTask
+        screening_task = LLMIterationTask()
+        screening_scores = screening_task.calculate_screening_scores(all_results)
+        diagnosis = screening_task.calculate_diagnosis(all_results)
+        
+        # Debug: Print diagnosis and data for comparison
+        print(f"🔍 Debug: Reporting tab - diagnosis: {diagnosis}")
+        print(f"🔍 Debug: Reporting tab - screening_scores: {screening_scores}")
+        print(f"🔍 Debug: Reporting tab - all_results keys: {list(all_results.keys())}")
+        
+        # Get cumulative results for debug
+        for result in all_results.values():
+            if result.get('status') == 'completed' and 'final_result' in result:
+                final_result = result['final_result']
+                feature_scores = final_result.get('feature_scores', {})
+                print(f"🔍 Debug: Reporting tab - feature_scores: {feature_scores}")
+                break
+        
+        # Get cumulative results - same logic as Results tab
+        cumulative_question_results = {}
+        cumulative_feature_scores = {}
+        for result in all_results.values():
+            if result.get('status') == 'completed' and 'final_result' in result:
+                final_result = result['final_result']
+                cumulative_question_results = final_result.get('question_results', {})
+                cumulative_feature_scores = final_result.get('feature_scores', {})
+                break
+        
+        # Parse raw data for detailed analysis
+        parsed_data = self._parse_raw_results(all_results)
+        
+        # Calculate detailed scores
+        detailed_scores = self._calculate_detailed_scores(parsed_data)
+        
+        # Generate user-friendly report
+        user_report = self._generate_user_report(screening_scores, diagnosis, detailed_scores)
+        
+        # Display the report with image style
+        st.markdown("##### 📋 Screening Analysis Report")
+        
+        # User-friendly report with image styling
+        with st.expander("💝 Personalized Report", expanded=True):
+            # Display icon and title with image style
+            st.markdown("""
+            <style>
+            @keyframes colorChange {
+                0% { color: #000000; }
+                20% { color: #ff6b6b; }
+                40% { color: #4ecdc4; }
+                60% { color: #45b7d1; }
+                80% { color: #96ceb4; }
+                100% { color: #000000; }
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            # Determine icon color based on diagnosis and scores
+            icon_color = "#ff0000"  # Default red
+            if user_report.get('icon') == '🟢':
+                icon_color = "#28a745"  # Green
+            elif user_report.get('icon') == '🟡':
+                icon_color = "#ffc107"  # Yellow
+            elif user_report.get('icon') == '🔴':
+                icon_color = "#dc3545"  # Red
+            
+            st.markdown(f"""
+            <div style="
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 20px;
+                margin-bottom: 24px;
+                padding: 20px;
+            ">
+                <div style="
+                    width: 50px;
+                    height: 50px;
+                    background: {icon_color};
+                    border-radius: 50%;
+                    box-shadow: 0 2px 8px {icon_color}40;
+                    flex-shrink: 0;
+                "></div>
+                <div style="
+                    display: flex;
+                    flex-direction: column;
+                    gap: 4px;
+                    text-align: center;
+                ">
+                    <h3 style="
+                        margin: 0;
+                        font-size: 27px;
+                        font-weight: 700;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        line-height: 1.2;
+                        animation: colorChange 8s ease-in-out infinite;
+                    ">Your V³ Emotional Snapshot</h3>
+                    <p style="
+                        margin: 0;
+                        color: #666666;
+                        font-size: 14px;
+                        font-weight: 400;
+                        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                        line-height: 1.3;
+                    ">What Your Voice and Verbal Signals Suggest</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            st.markdown("---")
+            
+            # Display summary with pastel background
+            st.markdown("#### Summary")
+            st.markdown(f"""
+            <div style="
+                background: #f0f8ff;
+                padding: 16px;
+                border-radius: 8px;
+                border-left: 4px solid #87ceeb;
+                margin-bottom: 16px;
+            ">
+                <p style="margin: 0; color: #2f4f4f; line-height: 1.6;">{user_report['summary']}</p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Display tips section (always show) - Mobile responsive
+            st.markdown("""
+            <h4 style="
+                word-wrap: break-word; 
+                overflow-wrap: break-word; 
+                white-space: nowrap; 
+                word-break: keep-all;
+                line-height: 1.2;
+                font-size: 16px;
+                min-width: 0;
+            ">💡 Tips for you by V³-Gemma3n:</h4>
+            """, unsafe_allow_html=True)
+            if user_report.get('tips'):
+                for i, tip in enumerate(user_report['tips']):
+                    pastel_colors = ['#e6f3ff', '#f0fff0', '#fff8dc', '#ffe6e6', '#f0e6ff']
+                    color = pastel_colors[i % len(pastel_colors)]
+                    border_colors = ['#87ceeb', '#98fb98', '#f0e68c', '#ffb6c1', '#dda0dd']
+                    border_color = border_colors[i % len(border_colors)]
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background: {color};
+                        padding: 12px;
+                        border-radius: 8px;
+                        border-left: 3px solid {border_color};
+                        margin-bottom: 8px;
+                        word-wrap: break-word;
+                        overflow-wrap: break-word;
+                        white-space: normal;
+                    ">
+                        <p style="margin: 0; color: #2f4f4f; line-height: 1.5; word-break: break-word;">• {tip}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            else:
+                # Default tips if none provided
+                default_tips = [
+                    "Gentle stretching can help you refocus and feel more present.",
+                    "A relaxing massage in a quiet space can help recharge your energy."
+                ]
+                for i, tip in enumerate(default_tips):
+                    pastel_colors = ['#e6f3ff', '#f0fff0', '#fff8dc', '#ffe6e6', '#f0e6ff']
+                    color = pastel_colors[i % len(pastel_colors)]
+                    border_colors = ['#87ceeb', '#98fb98', '#f0e68c', '#ffb6c1', '#dda0dd']
+                    border_color = border_colors[i % len(border_colors)]
+                    
+                    st.markdown(f"""
+                    <div style="
+                        background: {color};
+                        padding: 12px;
+                        border-radius: 8px;
+                        border-left: 3px solid {border_color};
+                        margin-bottom: 8px;
+                    ">
+                        <p style="margin: 0; color: #2f4f4f; line-height: 1.5;">• {tip}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+            
+            # Display warning only for suicidal thoughts with pastel styling
+            if user_report.get('warning') and 'suicidal' in user_report.get('warning', '').lower():
+                st.markdown("#### ⚠️ Important Notice")
+                st.markdown(f"""
+                <div style="
+                    background: #fff0f5;
+                    padding: 16px;
+                    border-radius: 8px;
+                    border-left: 4px solid #ffb6c1;
+                    margin-bottom: 16px;
+                ">
+                    <p style="margin: 0; color: #8b4513; line-height: 1.5;">{user_report['warning']}</p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            # Add reference notice at the bottom for all cases
+            st.markdown("---")
+            st.markdown("""
+            <div style="
+                background: #f8f9fa;
+                padding: 12px;
+                border-radius: 6px;
+                border-left: 3px solid #6c757d;
+                margin-top: 20px;
+                font-size: 12px;
+                color: #6c757d;
+                font-style: italic;
+            ">
+                <p style="margin: 0; line-height: 1.4;">
+                    This report is for informational purposes only and is not intended to be legal advice.
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+    
+    def _parse_raw_results(self, all_results):
+        """Parse raw screening results into structured data with single final values"""
+        import re
+        
+        def get_final_value(values):
+            """Get final value based on rules"""
+            if not values:
+                return 0
+            
+            # Rule 1: If 9 exists, return 9
+            if 9 in values:
+                return 9
+            
+            # Rule 2: Return most frequent value
+            from collections import Counter
+            counter = Counter(values)
+            max_count = max(counter.values())
+            most_frequent = [val for val, count in counter.items() if count == max_count]
+            
+            # If tie, return higher value
+            return max(most_frequent)
+        
+        # Initialize data structure
+        raw_data = {
+            'Q1': [],
+            'Q2': {'a': [], 'b': []},
+            'Q3': {'a': [], 'b': []},
+            'Q4': [],
+            'Q5': [],
+            'Q6': [],
+            'Q7': [],
+            'Q8': [],
+            'Q9': [],
+            'Q10': [],
+            'Q11': [],
+            'Q12': [],
+            'Q13': [],
+            'Q14': {'a': [], 'b': [], 'c': []},
+            'Q15': []
+        }
+        
+        # Extract raw text from results
+        raw_text = ""
+        for result in all_results.values():
+            if result.get('status') == 'completed' and 'log' in result:
+                for log_entry in result.get('log', []):
+                    if 'raw_response' in log_entry:
+                        raw_text += log_entry['raw_response'] + "\n"
+        
+        # Parse Q1
+        q1_match = re.search(r'\(Q1\)[^:]*:\s*-?\s*(\d+)', raw_text)
+        if q1_match:
+            raw_data['Q1'] = [int(q1_match.group(1))]
+        
+        # Parse Q2
+        q2_matches = re.findall(r'\(Q2\)[^:]*:\s*-?\s*a\)\s*(-?\d+)\s*-\s*b\)\s*(-?\d+)', raw_text)
+        for match in q2_matches:
+            raw_data['Q2']['a'].append(int(match[0]))
+            raw_data['Q2']['b'].append(int(match[1]))
+        
+        # Parse Q3
+        q3_matches = re.findall(r'\(Q3\)[^:]*:\s*-?\s*a\)\s*(-?\d+)\s*-\s*b\)\s*(-?\d+)', raw_text)
+        for match in q3_matches:
+            raw_data['Q3']['a'].append(int(match[0]))
+            raw_data['Q3']['b'].append(int(match[1]))
+        
+        # Parse Q4-Q13 (single values)
+        for i in range(4, 14):
+            pattern = rf'\(Q{i}\)[^:]*:\s*-?\s*(-?\d+)'
+            matches = re.findall(pattern, raw_text)
+            raw_data[f'Q{i}'] = [int(match) for match in matches]
+        
+        # Parse Q14
+        q14_match = re.search(r'\(Q14\)[^:]*:\s*-?\s*a\)\s*(-?\d+)\s*-\s*b\)\s*(-?\d+)\s*-\s*c\)\s*(-?\d+)', raw_text)
+        if q14_match:
+            raw_data['Q14']['a'] = [int(q14_match.group(1))]
+            raw_data['Q14']['b'] = [int(q14_match.group(2))]
+            raw_data['Q14']['c'] = [int(q14_match.group(3))]
+        
+        # Parse Q15
+        q15_match = re.search(r'\(Q15\)[^:]*:\s*-?\s*(-?\d+)', raw_text)
+        if q15_match:
+            raw_data['Q15'] = [int(q15_match.group(1))]
+        
+        # Convert to final single values
+        parsed_data = {}
+        for question, values in raw_data.items():
+            if isinstance(values, dict):
+                parsed_data[question] = {}
+                for sub_key, sub_values in values.items():
+                    parsed_data[question][sub_key] = get_final_value(sub_values)
+            else:
+                parsed_data[question] = get_final_value(values)
+        
+        return parsed_data
+    
+    def _calculate_detailed_scores(self, parsed_data):
+        """Calculate domain-specific and diagnostic criteria scores"""
+        
+        # Domain-specific scores
+        image_score = (
+            parsed_data['Q1'] +
+            parsed_data['Q2']['a'] + parsed_data['Q2']['b'] +
+            parsed_data['Q3']['a'] + parsed_data['Q3']['b'] +
+            parsed_data['Q4'] +
+            parsed_data['Q5']
+        )
+        
+        voice_score = (
+            parsed_data['Q8'] +
+            parsed_data['Q9'] +
+            parsed_data['Q10'] +
+            parsed_data['Q11'] +
+            parsed_data['Q12']
+        )
+        
+        # Text analysis
+        q14_a = parsed_data['Q14']['a']
+        q14_b = parsed_data['Q14']['b']
+        q14_c = parsed_data['Q14']['c']
+        
+        text_analysis = {
+            'over_involvement': 'Yes' if q14_a == 0 else 'No',
+            'uniqueness': 'Yes' if q14_b == 0 else 'No',
+            'positive': 'Yes' if q14_c == 9 else ('N/A' if q14_c == 0 else 'No')
+        }
+        
+        # Diagnostic criteria
+        criteria = {}
+        
+        # Criterion 1: Loss of Interest
+        q1_val = parsed_data['Q1']
+        q3_a_val = parsed_data['Q3']['a']
+        criteria['loss_of_interest'] = 1 if (q1_val == 9 or q3_a_val == 9) else 0
+        
+        # Criterion 2: Depression (placeholder)
+        criteria['depression'] = 'TBD'
+        
+        # Criterion 3: Sleep
+        criteria['sleep'] = 0
+        
+        # Criterion 4: Fatigue
+        q3_a_val = parsed_data['Q3']['a']
+        q4_val = parsed_data['Q4']
+        q8_val = parsed_data['Q8']
+        q9_val = parsed_data['Q9']
+        criteria['fatigue'] = 1 if (q3_a_val == 9 or q4_val == 9 or q8_val == 9 or q9_val == 9) else 0
+        
+        # Criterion 5: Appetite
+        q6_val = parsed_data['Q6']
+        criteria['appetite'] = 1 if q6_val == 9 else 0
+        
+        # Criterion 6: Negative Thoughts
+        if q14_c == 9:  # Text is positive
+            criteria['negative_thoughts'] = 0
+        else:
+            q7_val = parsed_data['Q7']
+            criteria['negative_thoughts'] = 1 if (q1_val == 9 or q7_val == 9) else 0
+        
+        # Criterion 7: Concentration Problems
+        q12_val = parsed_data['Q12']
+        q13_val = parsed_data['Q13']
+        criteria['concentration'] = 1 if (q12_val == 9 or q13_val == 9) else 0
+        
+        # Criterion 8: Psychomotor Retardation
+        criteria['psychomotor'] = 1 if q9_val == 9 else 0
+        
+        # Criterion 9: Suicidal Ideation
+        q15_val = parsed_data['Q15']
+        criteria['suicidal_ideation'] = 1 if q15_val == 9 else 0
+        
+        return {
+            'domain_scores': {
+                'image_score': image_score,
+                'voice_score': voice_score,
+                'text_analysis': text_analysis
+            },
+            'diagnostic_criteria': criteria
+        }
+    
+    def _generate_user_report(self, screening_scores, diagnosis, detailed_scores):
+        """Generate user-friendly report based on diagnosis and Q15 result using LLM prompting"""
+        
+        # Get Q15 result for depression case differentiation
+        q15_result = 0
+        for result in st.session_state.task_results.values():
+            if result.get('status') == 'completed' and 'final_result' in result:
+                final_result = result['final_result']
+                feature_scores = final_result.get('feature_scores', {})
+                q15_result = feature_scores.get('Q15_result', 0)
+                break
+        
+        # Extract diagnostic criteria from detailed_scores
+        criteria = detailed_scores.get('diagnostic_criteria', {})
+        
+        # Calculate total score
+        total_score = sum([
+            criteria.get('loss_of_interest', 0),
+            criteria.get('fatigue', 0),
+            criteria.get('appetite', 0),
+            criteria.get('negative_thoughts', 0),
+            criteria.get('concentration', 0),
+            criteria.get('psychomotor', 0),
+            criteria.get('suicidal_ideation', 0)
+        ])
+        
+        # Create PHQ-9 scores dictionary for LLM prompt
+        phq9_scores = {
+            'interest_list': criteria.get('loss_of_interest', 0),
+            'depression': 0,  # Placeholder
+            'sleep': criteria.get('sleep', 0),
+            'fatigue': criteria.get('fatigue', 0),
+            'appetite': criteria.get('appetite', 0),
+            'negative_thoughts': criteria.get('negative_thoughts', 0),
+            'concentration': criteria.get('concentration', 0),
+            'slowness': criteria.get('psychomotor', 0),
+            'suicidal_thoughts': criteria.get('suicidal_ideation', 0)
+        }
+        
+        # Debug: Print diagnosis being used in report generation
+        print(f"🔍 Debug: _generate_user_report - diagnosis: {diagnosis}")
+        print(f"🔍 Debug: _generate_user_report - total_score: {total_score}")
+        print(f"🔍 Debug: _generate_user_report - phq9_scores: {phq9_scores}")
+        
+        # Generate report using LLM if model is available
+        if hasattr(self, 'app_controller') and self.app_controller.model_service and self.app_controller.model_service.is_model_ready():
+            try:
+                return self._generate_llm_report(phq9_scores, total_score, diagnosis)
+            except Exception as e:
+                print(f"⚠️ LLM report generation failed: {e}")
+                # Fallback to hardcoded reports
+                return self._generate_fallback_report(diagnosis, q15_result)
+        else:
+            # Fallback to hardcoded reports
+            return self._generate_fallback_report(diagnosis, q15_result)
+    
+    def _generate_llm_report(self, phq9_scores, total_score, diagnosis):
+        """Generate report using LLM prompting based on demo.ipynb logic"""
+        
+        generation_prompt = f"""
+You are a warm, gentle assistant generating a short emotional screening report for users based on PHQ-9 scores and symptom presence.
+
+Input:
+- phq9_scores: {phq9_scores}
+- phq9_total: {total_score}
+- diagnosis: {diagnosis}
+
+Classification mapping:
+- Normal: 'normal', 'Typical Range', 'normal(optimism)'
+- Borderline: 'Monitoring Suggested'
+- Depression: 'depressive', 'Clinical Evaluation Advised'
+
+Your output must follow these EXACT rules:
+
+1. Summary - exactly 2 sentences:
+   - Sentence 1: Softly describe what was observed from their face, voice, and words.
+   - Sentence 2: Based on diagnosis and total score:
+     - For 'normal', 'typical range', 'normal(optimism)': "From your face, voice, and words, we noticed just a few subtle signals — overall, you seem to be doing very well. It looks like you're taking good care of yourself right now."
+     - For 'monitoring suggested': "Your face, voice, and words showed a few small signs that stood out today. You're doing okay, but if any of these signs persist or get stronger, it might help to check in with a professional."
+     - For 'depressive', 'clinical evaluation advised': "Your face, voice, and words showed several signs that may reflect some emotional strain. Right now, it may be a good time to speak with a mental health professional who can support you further."
+
+2. Tips for you by V³-Gemma3n section:
+   - If suicidal_thoughts is 1: Show warning message only
+   - Otherwise: Choose tips based on diagnosis:
+     - For 'normal', 'typical range', 'normal(optimism)': Use these tips:
+       * "Gentle stretching can help you refocus and feel more present."
+       * "A relaxing massage in a quiet space can help recharge your energy."
+     - For 'monitoring suggested': Use these tips:
+       * "Revisit a hobby you used to truly enjoy — it might bring a smile back."
+       * "Consider a healthy, mood-lifting meal today — it can really help."
+     - For 'depressive', 'clinical evaluation advised': Use these tips:
+       * "Revisit a hobby you used to truly enjoy — it might bring a smile back."
+       * "A brisk walk or short stroll can help settle your body and mind."
+
+3. If suicidal_thoughts is 1, use this EXACT warning:
+"⚠️ These kinds of thoughts can feel heavy — please don't carry them alone. Talking to a professional could really help, and you absolutely deserve that care."
+
+IMPORTANT: Format your response EXACTLY as follows:
+
+Summary: [your 2 sentences here]
+Tips for you by V³-Gemma3n: [tips or warning message here]
+
+Always use soft, non-diagnostic language. Keep it brief, stigma-free, and supportive.
+"""
+
+        try:
+            # Use the model service to generate the report
+            content_items = [{"type": "text", "text": generation_prompt}]
+            response = self.app_controller.model_service.process_prompt(
+                {"role": "user", "content": content_items}, 
+                max_tokens=12000
+            )
+            
+            # Parse the response
+            lines = response.strip().split('\n')
+            summary = ""
+            tips = []
+            warning = None
+            
+            current_section = None
+            for line in lines:
+                line = line.strip()
+                if line.startswith('Summary:'):
+                    current_section = 'summary'
+                    summary = line.replace('Summary:', '').strip()
+                elif line.startswith('Tips for you by V³-Gemma3n:'):
+                    current_section = 'tips'
+                    tips_text = line.replace('Tips for you by V³-Gemma3n:', '').strip()
+                    if 'These kinds of thoughts can feel heavy' in tips_text:
+                        warning = tips_text
+                    else:
+                        tips = [tip.strip() for tip in tips_text.split('\n') if tip.strip()]
+                elif current_section == 'summary' and line and not line.startswith('Tips'):
+                    summary += " " + line
+                elif current_section == 'tips' and line and not line.startswith('Summary'):
+                    if 'These kinds of thoughts can feel heavy' in line:
+                        warning = line
+                    else:
+                        tips.append(line)
+            
+            # Ensure we have content
+            if not summary:
+                summary = "From your face, voice, and words, we noticed some signals that we'd like to share with you."
+            
+            if not tips and not warning:
+                # Generate default tips based on symptoms
+                active_symptoms = [k for k, v in phq9_scores.items() if v == 1 and k != 'suicidal_thoughts']
+                if active_symptoms:
+                    symptom_tips = {
+                        'interest_list': "Try watching a funny or entertaining drama to lift your mood.",
+                        'fatigue': "A relaxing massage in a quiet space can help recharge your energy.",
+                        'appetite': "Consider a healthy, mood-lifting meal today — it can really help.",
+                        'negative_thoughts': "Try a simple task like organizing a drawer to feel a small sense of accomplishment.",
+                        'concentration': "Gentle stretching can help you refocus and feel more present.",
+                        'slowness': "A brisk walk or short stroll can help settle your body and mind."
+                    }
+                    tips = [symptom_tips.get(symptom, "Take a moment to breathe deeply and center yourself.") 
+                           for symptom in active_symptoms[:2]]
+                else:
+                    tips = ["Gentle stretching can help you refocus and feel more present.",
+                           "A relaxing massage in a quiet space can help recharge your energy."]
+            
+            # Determine icon based on diagnosis and scores
+            icon = '🔴'  # Default red
+            
+            # Check for suicidal thoughts first (highest priority)
+            if phq9_scores['suicidal_thoughts'] == 1:
+                icon = '🔴'  # Red for suicidal thoughts
+            # Check diagnosis next
+            elif diagnosis.lower() in ['normal', 'typical range', 'normal(optimism)']:
+                icon = '🟢'  # Green for normal
+            elif diagnosis.lower() == 'monitoring suggested':
+                icon = '🟡'  # Yellow for mild
+            elif diagnosis.lower() in ['depressive', 'clinical evaluation advised']:
+                icon = '🔴'  # Red for depression
+            # Fallback to score-based logic
+            elif total_score <= 3:
+                icon = '🟢'  # Green for normal
+            elif total_score <= 6:
+                icon = '🟡'  # Yellow for mild
+            else:
+                icon = '🔴'  # Red for depression
+            
+            return {
+                'summary': summary,
+                'tips': tips,
+                'warning': warning,
+                'icon': icon,
+                'title': 'Your V³ Emotional Snapshot\nWhat Your Voice and Verbal Signals Suggest'
+            }
+            
+        except Exception as e:
+            print(f"⚠️ Error generating LLM report: {e}")
+            raise e
+    
+    def _generate_fallback_report(self, diagnosis, q15_result):
+        """Generate fallback report using hardcoded text"""
+        diagnosis_lower = diagnosis.lower()
+        
+        # Debug: Print diagnosis processing in fallback
+        print(f"🔍 Debug: _generate_fallback_report - original diagnosis: {diagnosis}")
+        print(f"🔍 Debug: _generate_fallback_report - diagnosis_lower: {diagnosis_lower}")
+        print(f"🔍 Debug: _generate_fallback_report - q15_result: {q15_result}")
+        
+        if diagnosis_lower in ['normal', 'typical range', 'normal(optimism)']:
+            print(f"🔍 Debug: _generate_fallback_report - returning normal case")
+            return self._generate_normal_case_report()
+        elif diagnosis_lower == 'monitoring suggested':
+            print(f"🔍 Debug: _generate_fallback_report - returning mild case")
+            return self._generate_mild_case_report()
+        elif diagnosis_lower in ['depressive', 'clinical evaluation advised']:
+            if q15_result == 1:
+                print(f"🔍 Debug: _generate_fallback_report - returning depression case 2")
+                return self._generate_depression_case2_report()
+            else:
+                print(f"🔍 Debug: _generate_fallback_report - returning depression case 1")
+                return self._generate_depression_case1_report()
+        else:
+            # Fallback to normal case
+            print(f"🔍 Debug: _generate_fallback_report - returning normal case (fallback)")
+            return self._generate_normal_case_report()
+    
+    def _generate_normal_case_report(self):
+        """Generate normal case report (첨부이미지 1)"""
+        return {
+            'summary': "From your face, voice, and words, we noticed just a few subtle signals — overall, you seem to be doing very well. It looks like you're taking good care of yourself right now.",
+            'tips': [
+                "Gentle stretching can help you refocus and feel more present.",
+                "A relaxing massage in a quiet space can help recharge your energy."
+            ],
+            'warning': None,
+            'icon': '🟢',  # Green circle for normal
+            'title': 'Your V³ Emotional Snapshot\nWhat Your Voice and Verbal Signals Suggest'
+        }
+    
+    def _generate_mild_case_report(self):
+        """Generate mild case report (첨부이미지 2)"""
+        return {
+            'summary': "Your face, voice, and words showed a few small signs that stood out today. You're doing okay, but if any of these signs persist or get stronger, it might help to check in with a professional.",
+            'tips': [
+                "Revisit a hobby you used to truly enjoy — it might bring a smile back.",
+                "Consider a healthy, mood-lifting meal today — it can really help."
+            ],
+            'warning': None,
+            'icon': '🟡',  # Yellow circle for mild
+            'title': 'Your V³ Emotional Snapshot\nWhat Your Voice and Verbal Signals Suggest'
+        }
+    
+    def _generate_depression_case1_report(self):
+        """Generate depression case 1 report (첨부이미지 3)"""
+        return {
+            'summary': "Your face, voice, and words showed several signs that may reflect some emotional strain. Right now, it may be a good time to speak with a mental health professional who can support you further.",
+            'tips': [
+                "Revisit a hobby you used to truly enjoy — it might bring a smile back.",
+                "A brisk walk or short stroll can help settle your body and mind."
+            ],
+            'warning': None,
+            'icon': '🔴',  # Red circle for depression
+            'title': 'Your V³ Emotional Snapshot\nWhat Your Voice and Verbal Signals Suggest'
+        }
+    
+    def _generate_depression_case2_report(self):
+        """Generate depression case 2 report (첨부이미지 4)"""
+        return {
+            'summary': "Your face, voice, and words showed several signs that may reflect some emotional strain. Right now, it may be a good time to speak with a mental health professional who can support you further.",
+            'tips': [],
+            'warning': "⚠️ These kinds of thoughts can feel heavy — please don't carry them alone. Talking to a professional could really help, and you absolutely deserve that care.",
+            'icon': '🔴',  # Red circle for depression
+            'title': 'Your V³ Emotional Snapshot\nWhat Your Voice and Verbal Signals Suggest'
+        }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

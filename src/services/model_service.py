@@ -34,7 +34,7 @@ class ChatState:
         """
         if not self.model or not self.processor:
             raise ValueError("Model and processor must be initialized")
-        
+        self.history = []
         # Add message to history
         self.history.append(message)
         
@@ -49,12 +49,13 @@ class ChatState:
             )
             
             input_len = input_ids["input_ids"].shape[-1]
-            input_ids = input_ids.to(self.model.device, dtype=self.model.dtype)
+            input_ids = input_ids.to('cuda:0', dtype=self.model.dtype)
             
             # Generate response - exactly as in the example
             outputs = self.model.generate(
                 **input_ids,
                 max_new_tokens=max_tokens,
+                temperature=0.1,
                 disable_compile=True
             )
             
@@ -276,7 +277,12 @@ class ModelService:
             model_path: Path or name of the model to load
         """
         try:
+            import torch
             from transformers import AutoModelForImageTextToText, AutoProcessor
+            
+            # Check CUDA availability
+            if not torch.cuda.is_available():
+                raise RuntimeError("CUDA is not available. Please ensure GPU drivers are installed.")
             
             self.model_path = model_path
             cache_path = self._get_model_cache_path(model_path)
@@ -285,11 +291,12 @@ class ModelService:
             if self._is_model_cached(model_path):
                 print(f"Loading model from cache: {cache_path}")
                 
-                # Load from cache
+                # Load from cache with proper device mapping
                 self.processor = AutoProcessor.from_pretrained(str(cache_path))
                 self.model = AutoModelForImageTextToText.from_pretrained(
                     str(cache_path), 
-                    torch_dtype="auto",
+                    torch_dtype=torch.float16,
+                    device_map=None
                 ).to("cuda")
                 
                 print(f"Model loaded from cache successfully!")
@@ -301,21 +308,71 @@ class ModelService:
                 self.processor = AutoProcessor.from_pretrained(model_path)
                 self.model = AutoModelForImageTextToText.from_pretrained(
                     model_path, 
-                    torch_dtype="auto", 
-                    device_map="auto"
-                )
+                    torch_dtype=torch.float16, 
+                    device_map=None
+                ).to("cuda")
                 
                 print(f"Model downloaded successfully!")
                 
                 # Save to cache for future use
                 self._save_model_to_cache(model_path)
             
+            # Force CUDA device
+            torch.cuda.set_device(0)
+            
+            # Model is already moved to CUDA during loading
+            print("Model loaded and moved to CUDA successfully!")
+            
+            # Verify model is on CUDA
+            if hasattr(self.model, 'device'):
+                current_device = str(self.model.device)
+                print(f"Model device: {current_device}")
+                if 'cuda' not in current_device.lower():
+                    print("Warning: Model is not on CUDA device")
+            else:
+                print("Warning: Could not determine model device")
+            
             # Initialize chat state
             self.chat_state = ChatState(self.model, self.processor)
             self.is_initialized = True
             
-            print(f"Device: {self.model.device}")
-            print(f"DType: {self.model.dtype}")
+            # Debug prints for CUDA status
+            print(f"🔍 Debug: CUDA available: {torch.cuda.is_available()}")
+            print(f"🔍 Debug: CUDA device count: {torch.cuda.device_count()}")
+            print(f"🔍 Debug: Current CUDA device: {torch.cuda.current_device()}")
+            
+            # Get model device info
+            try:
+                model_device = next(self.model.parameters()).device
+                print(f"🔍 Debug: Model device: {model_device}")
+            except Exception as e:
+                print(f"Warning: Could not get model device: {str(e)}")
+            
+            # Verify model is properly loaded
+            if hasattr(self.model, 'device'):
+                print(f"Model device attribute: {self.model.device}")
+            else:
+                print("Warning: Model device attribute not available")
+            
+            if hasattr(self.model, 'dtype'):
+                print(f"Model dtype: {self.model.dtype}")
+            else:
+                print("Warning: Model dtype attribute not available")
+            
+            # Additional verification - only if model is on CUDA
+            try:
+                if torch.cuda.is_available() and hasattr(self.model, 'device'):
+                    if 'cuda' in str(self.model.device).lower():
+                        # Test if model can be used on CUDA
+                        test_input = torch.randn(1, 3, 224, 224).to('cuda:0')
+                        print("Model initialization verification successful (CUDA)")
+                    else:
+                        print("Model is not on CUDA, skipping CUDA verification")
+                else:
+                    print("CUDA not available or model device unknown, skipping verification")
+            except Exception as e:
+                print(f"Warning: Model verification failed: {str(e)}")
+                # Don't fail initialization for verification issues
             
         except Exception as e:
             self.is_initialized = False
@@ -403,11 +460,20 @@ class ModelService:
                 "dtype": None
             }
         
+        # Get CUDA information
+        cuda_info = {
+            "cuda_available": torch.cuda.is_available(),
+            "cuda_device_count": torch.cuda.device_count() if torch.cuda.is_available() else 0,
+            "current_cuda_device": torch.cuda.current_device() if torch.cuda.is_available() else None,
+            "cuda_device_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+        }
+        
         return {
             "initialized": True,
             "model_path": self.model_path,
             "device": str(self.model.device) if self.model else None,
-            "dtype": str(self.model.dtype) if self.model else None
+            "dtype": str(self.model.dtype) if self.model else None,
+            "cuda_info": cuda_info
         }
     
     def clear_conversation(self) -> None:
@@ -576,11 +642,18 @@ class ModelService:
             if torch.cuda.is_available():
                 cleanup_results["memory_before"] = torch.cuda.memory_allocated() / (1024**3)  # GB
             
-            # Step 1: Clear model references
+            # Step 1: Clear model references with proper cleanup
             if self.model is not None:
-                del self.model
-                self.model = None
-                cleanup_results["actions_taken"].append("Deleted model reference")
+                try:
+                    # Move model to CPU first to avoid device issues
+                    if hasattr(self.model, 'cpu'):
+                        self.model.cpu()
+                    del self.model
+                    cleanup_results["actions_taken"].append("Moved model to CPU and deleted reference")
+                except Exception as e:
+                    cleanup_results["actions_taken"].append(f"Error moving model to CPU: {str(e)}")
+                finally:
+                    self.model = None
             
             if self.processor is not None:
                 del self.processor
