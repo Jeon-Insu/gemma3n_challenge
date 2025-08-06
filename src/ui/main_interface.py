@@ -1050,7 +1050,7 @@ class MainInterface:
                     st.error(f"❌ Error uploading file: {str(e)}")
         
         # Info message below the tabs
-        st.info("Please record a video according to the mission or upload an existing video.", icon="ℹ️")
+        st.info("📹 **Video Recording Guidelines**\n\n• Please record a video according to the mission or upload an existing video  \n• Make sure your upper body is clearly visible in the recording", icon="ℹ️")
     
     def execute_current_task(self, task, user_text):
         """Execute the current task with the model"""
@@ -2023,7 +2023,7 @@ class MainInterface:
     
     def render_results_tab(self):
         """Render the Results tab showing task execution results"""
-        st.markdown("## 📊 Task Results")
+        st.markdown("##### 📊 Task Results")
         
         # Check if any tasks have been executed
         if not st.session_state.task_results:
@@ -2038,14 +2038,18 @@ class MainInterface:
         # Summary metrics
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("Total Tasks", total_tasks)
+            st.markdown("##### Total Tasks")
+            st.markdown(f"##### {total_tasks}")
         with col2:
-            st.metric("Executed", executed_tasks)
+            st.markdown("##### Executed")
+            st.markdown(f"##### {executed_tasks}")
         with col3:
-            st.metric("Successful", successful_tasks)
+            st.markdown("##### Successful")
+            st.markdown(f"##### {successful_tasks}")
         with col4:
             success_rate = (successful_tasks / executed_tasks * 100) if executed_tasks > 0 else 0
-            st.metric("Success Rate", f"{success_rate:.1f}%")
+            st.markdown("##### Success Rate")
+            st.markdown(f"##### {success_rate:.1f}%")
         
         # Show processing status if any task is being processed
         if st.session_state.processing_task_id is not None:
@@ -2183,7 +2187,7 @@ class MainInterface:
                             
                             # Display Cumulative Question Results
                             st.markdown("---")
-                            st.markdown("#### 📋 Cumulative Question Results (Q1-Q15)")
+                            st.markdown("##### 📋 Cumulative Question Results (Q1-Q15)")
                             
                             # Get cumulative results from any completed result
                             cumulative_question_results = {}
@@ -2224,7 +2228,7 @@ class MainInterface:
                             
                             # Display Q14 (text_feature) and Q15 separately
                             st.markdown("---")
-                            st.markdown("#### 🎭 Special Results")
+                            st.markdown("##### 🎭 Special Results")
                             
                             col1, col2 = st.columns(2)
                             with col1:
@@ -2268,7 +2272,7 @@ class MainInterface:
         
         # Export Results
         st.markdown("---")
-        st.markdown("### 💾 Export Results")
+        st.markdown("##### 💾 Export Results")
         
         col1, col2 = st.columns(2)
         
@@ -2286,13 +2290,13 @@ class MainInterface:
     def show_detailed_calculation_results(self, all_results, screening_scores, diagnosis):
         """Show detailed calculation results in a separate section"""
         st.markdown("---")
-        st.markdown("## 🔍 Detailed Calculation Results")
+        st.markdown("##### 🔍 Detailed Calculation Results")
         
         # Create tabs for different types of analysis
         tab1, tab2, tab3, tab4 = st.tabs(["📊 Raw Results", "🧮 Screening Calculation", "🎯 Diagnosis Logic", "📋 Summary"])
         
         with tab1:
-            st.markdown("### 📊 Raw Question Set Results")
+            st.markdown("##### 📊 Raw Question Set Results")
             
             # Display raw results for each question set
             for question_key in sorted(all_results.keys()):
@@ -2411,7 +2415,7 @@ class MainInterface:
             st.markdown("### 📋 Complete Summary")
             
             # Overall summary
-            st.markdown("**📊 Overall Results:**")
+            st.markdown("##### 📊 Overall Results")
             st.markdown(f"• **Total Question Sets:** {len(all_results)}/15")
             st.markdown(f"• **Screening Total Score:** {sum(screening_scores.values())}/9")
             st.markdown(f"• **Final Diagnosis:** {diagnosis.upper()}")
@@ -2430,7 +2434,7 @@ class MainInterface:
             
             # Export detailed results
             st.markdown("---")
-            st.markdown("**💾 Export Detailed Results:**")
+            st.markdown("##### 💾 Export Detailed Results")
             
             col1, col2 = st.columns(2)
             with col1:

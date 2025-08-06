@@ -9,8 +9,6 @@ import torch
 
 from src.services.model_service import ModelService
 from src.services.storage_service import StorageService, FileManager
-from src.services.batch_service import BatchExecutor
-from src.services.input_handlers import TextInputHandler, ImageInputHandler, AudioInputHandler
 
 
 class AppController:
@@ -20,12 +18,6 @@ class AppController:
         self.model_service: Optional[ModelService] = None
         self.storage_service: Optional[StorageService] = None
         self.file_manager: Optional[FileManager] = None
-        self.batch_executor: Optional[BatchExecutor] = None
-        
-        # Input handlers
-        self.text_handler = TextInputHandler()
-        self.image_handler = ImageInputHandler()
-        self.audio_handler = AudioInputHandler()
         
         self._initialize_services()
     
@@ -41,13 +33,6 @@ class AppController:
             
             # Initialize model service (but don't load model yet)
             self.model_service = ModelService()
-            
-            # Initialize batch executor
-            self.batch_executor = BatchExecutor(
-                self.model_service,
-                self.storage_service,
-                self.file_manager
-            )
             
         except Exception as e:
             st.error(f"Failed to initialize services: {str(e)}")
@@ -130,39 +115,7 @@ class AppController:
             return self.model_service.get_model_info()
         return {"initialized": False}
     
-    def process_text_input(self, text: str) -> dict:
-        """Process text input"""
-        return self.text_handler.handle_text_input(text)
-    
-    def process_image_input(self, uploaded_file) -> dict:
-        """Process image input"""
-        return self.image_handler.handle_image_input(uploaded_file)
-    
-    def process_audio_input(self, uploaded_file) -> dict:
-        """Process audio input"""
-        return self.audio_handler.handle_audio_input(uploaded_file)
-    
-    def execute_batch(self, batch, max_tokens: int = 256, save_results: bool = True) -> dict:
-        """
-        Execute a batch of prompts
-        
-        Args:
-            batch: PromptBatch to execute
-            max_tokens: Maximum tokens per response
-            save_results: Whether to save results
-            
-        Returns:
-            Execution results
-        """
-        if not self.is_model_ready():
-            raise RuntimeError("Model is not ready")
-        
-        return self.batch_executor.execute_batch(batch, max_tokens, save_results)
-    
-    def set_batch_progress_callback(self, callback):
-        """Set progress callback for batch execution"""
-        if self.batch_executor:
-            self.batch_executor.set_progress_callback(callback)
+
     
     def save_session(self, session_data: dict) -> str:
         """Save session data"""

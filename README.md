@@ -1,40 +1,64 @@
-# 🤖 Multimodal AI Chat with Gemma 3n
+# V³-Gemma: Multimodal Depression Screener
 
-A powerful Streamlit application that enables multimodal AI interactions using Google's Gemma 3n model. Create prompts with text, images, and audio, process them in batches, and save your sessions for later use.
+This project is a web-based application that performs comprehensive depression screening through multimodal analysis of user-recorded videos. It analyzes **V**isual, **V**ocal, and **V**erbal signals from video recordings using Google's Gemma 3n model to evaluate 15 standardized screening questions (Q1-Q15) and provides automated risk assessment and clinical insights.
 
-## ✨ Features
+🚀 **Live Demo**
+Try the application live on our cloud service!
 
-- **Multimodal Input Support**: Combine text, images (PNG, JPG, JPEG), audio (MP3, WAV, M4A), and video recording in your prompts
-- **Batch Processing**: Create and execute multiple prompts efficiently with progress tracking
-- **Shared Media**: Use shared images or audio across multiple text prompts in a batch
-- **Session Management**: Save and load your chat sessions with full conversation history
-- **Real-time Progress**: Track batch execution progress with detailed status updates
-- **File Management**: Automatic file storage and cleanup for uploaded media
-- **Responsive UI**: Clean, intuitive interface built with Streamlit
+➡️ **[V³-Gemma Depression Screener Demo](https://moai.ai.kr) or (https://moai.ai.kr.ngrok.app/)**
 
-## 🚀 Quick Start
+
+This project is intended as a comprehensive screening tool for researchers and healthcare professionals. The instructions below provide a step-by-step guide to get the application running locally or access it through our cloud service.
+
+## Project Structure
+
+This project is built with Streamlit and organized as follows:
+
+- `streamlit_app.py`: The main Streamlit application entry point
+- `src/app_controller.py`: Core application controller that manages all services
+- `src/ui/main_interface.py`: Main Streamlit interface with 4 tabs (Task, Screening, Results, Reporting)
+- `src/services/model_service.py`: Gemma 3n model integration and inference logic
+- `src/services/llm_iteration_task.py`: LLM iteration task processing for Q1-Q15 questions
+- `src/services/storage_service.py`: Session and file management
+- `config/questions.py`: Q1-Q15 screening questions configuration
+- `function/function.py`: Core model iteration functions
+- `data/`: Storage directory for sessions and extracted media files
+
+## Getting Started
+
+This guide assumes you have a working knowledge of Python development and access to a CUDA-compatible GPU for optimal performance.
 
 ### Prerequisites
 
 - Python 3.8 or higher
-- CUDA-compatible GPU (recommended for model inference)
-- At least 8GB RAM (16GB+ recommended)
-- FFmpeg (required for video processing)
+- CUDA-compatible GPU (8GB+ VRAM recommended)
+- FFmpeg for video processing
+- Camera and microphone access
 
-### Installation
+### Hugging Face Access
 
-1. **Clone the repository**
+The `google/gemma-3n-E2B-it` model requires Hugging Face authentication. Visit the model page, accept the license terms, and log in:
+
+```bash
+pip install huggingface_hub
+huggingface-cli login
+```
+
+### Installation & Setup
+
+1. **Clone and Navigate:**
    ```bash
    git clone <repository-url>
-   cd multimodal-streamlit-app
+   cd V3_gemma
    ```
 
-2. **Install dependencies**
+2. **Install Dependencies:**
+   It is highly recommended to use a Python virtual environment:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Install FFmpeg** (required for video processing)
+3. **Install FFmpeg:**
    ```bash
    # Ubuntu/Debian
    sudo apt update && sudo apt install ffmpeg
@@ -42,233 +66,107 @@ A powerful Streamlit application that enables multimodal AI interactions using G
    # macOS
    brew install ffmpeg
    
-   # Windows
-   # Download from https://ffmpeg.org/download.html
+   # Windows: Download from https://ffmpeg.org/download.html
    ```
 
-4. **Configure the application**
-   ```bash
-   cp .env.example .env
-   # Edit .env file with your preferred settings
-   ```
-
-5. **Run the application**
+4. **Run the Application:**
    ```bash
    streamlit run streamlit_app.py
    ```
+   The application will be accessible at `http://localhost:8501`.
 
-6. **Open your browser**
-   Navigate to `http://localhost:8501`
+   The first time you run this, the script will download the Gemma model, which may take some time.
 
-## 📖 Usage Guide
+## Core Features
 
-### 1. Initialize the Model
+### 🎥 Video Recording & Processing
+- Real-time video recording with camera and microphone
+- Automatic extraction of audio and image frames
+- FFmpeg-based video processing pipeline
 
-- Click "🔧 Model Configuration" to expand the setup section
-- Select your preferred Gemma 3n model variant
-- Click "🚀 Initialize Model" and wait for loading to complete
-- The status indicator will show "🟢 Model Ready" when initialization is successful
+### 🤖 AI-Powered Screening
+- **15 Comprehensive Questions (Q1-Q15):** Systematic evaluation using standardized screening criteria
+- **Visual Analysis (Q1-Q7):** Appearance, posture, facial expressions, body language assessment
+- **Audio Analysis (Q8-Q13):** Voice characteristics, speech patterns, silence detection
+- **Content Analysis (Q14-Q15):** Verbal responses to emotional stimuli (house fire scenario)
 
-### 2. Create Prompts
+### 📊 Intelligent Results & Reporting
+- **LLM-Powered Scoring:** Advanced algorithms using Gemma 3n for contextual analysis
+- **Automated Report Generation:** Comprehensive screening reports with clinical insights
+- **Risk Assessment:** Automated categorization (Low/Medium/High risk levels)
+- **Export Functionality:** JSON export for further analysis
 
-#### Single Modality
-- **Text Only**: Enter your text in the "💬 Text" tab
-- **Image Only**: Upload an image in the "🖼️ Image" tab
-- **Audio Only**: Upload an audio file in the "🎵 Audio" tab
-- **Video Only**: Record video with camera and microphone in the "🎥 Video" tab
+### 💾 Session Management
+- Auto-save screening sessions during processing
+- Load and review previous screening results
+- Comprehensive session history management
 
-#### Multimodal Combinations
-- Use multiple tabs to combine different input types
-- Example: Add text description + image for visual analysis
-- Example: Add text question + audio for speech analysis
-- Example: Add text question + video for behavioral analysis
+## Application Interface
 
-#### Shared Media (Optional)
-- Expand "🔗 Shared Media" section
-- Upload images/audio that will be shared across all text prompts in the batch
-- Useful for analyzing the same media with different text questions
+The application features 4 main tabs:
 
-### 3. Build and Execute Batches
+1. **📋 Task Tab:** Model configuration and initialization
+2. **🎬 Screening Tab:** Video recording and automatic Q1-Q15 question processing
+3. **📊 Results Tab:** Detailed screening results with scoring and analysis
+4. **📈 Reporting Tab:** Comprehensive reports and export functionality
 
-1. **Add Prompts**: Click "➕ Add Prompt to Batch" after creating each prompt
-2. **Review Batch**: Check the "📋 Prompt Batch" section to see all added prompts
-3. **Execute**: Click "🚀 Execute Batch" to process all prompts
-4. **Monitor Progress**: Watch the real-time progress indicator
-5. **View Results**: Check the "📊 Results" section for responses
+## Quick Usage Guide
 
-### 4. Manage Sessions
+1. **Initialize Model:** Configure and load the Gemma 3n model in the Task tab
+2. **Record Video:** Navigate to Screening tab, record a video describing the house fire image
+3. **Automatic Processing:** The system automatically processes all 15 questions (Q1-Q15)
+4. **View Results:** Check Results tab for detailed scoring and analysis
+5. **Generate Reports:** Use Reporting tab for comprehensive assessment reports
 
-- **Save Session**: Use the sidebar to save your current batch and results
-- **Load Session**: Restore previously saved sessions
-- **Session History**: Browse and manage your saved sessions
-
-## 🛠️ Configuration
+## Configuration
 
 ### Environment Variables
 
-Create a `.env` file based on `.env.example`:
+Create a `.env` file for custom configuration:
 
 ```env
-# Storage Configuration
-STORAGE_DIR=data                    # Directory for storing sessions and files
-
-# Input Limits
-MAX_TEXT_LENGTH=10000              # Maximum characters in text input
-MAX_IMAGE_SIZE_MB=10               # Maximum image file size
-MAX_AUDIO_SIZE_MB=25               # Maximum audio file size
-MAX_IMAGE_WIDTH=2048               # Maximum image width (auto-resize)
-MAX_IMAGE_HEIGHT=2048              # Maximum image height (auto-resize)
-
-# Model Parameters
-DEFAULT_MAX_TOKENS=256             # Default response length
-MIN_MAX_TOKENS=50                  # Minimum response length
-MAX_MAX_TOKENS=1000                # Maximum response length
-
-# Session Management
-AUTO_SAVE_SESSIONS=true            # Automatically save sessions
-SESSION_CLEANUP_DAYS=30            # Days before old sessions are cleaned up
+STORAGE_DIR=data
+DEFAULT_MAX_TOKENS=256
+AUTO_SAVE_SESSIONS=true
+SESSION_CLEANUP_DAYS=30
+MAX_VIDEO_SIZE_MB=100
 ```
 
-### Model Configuration
+### Model Variants
 
-The application supports these Gemma 3n model variants:
-- `google/gemma-3n-E2B-it` (default, smaller, faster)
-- `google/gemma-3n-E4B-it` (larger, more capable)
+- `google/gemma-3n-E2B-it` (default, faster, 2B parameters)
+- `google/gemma-3n-E4B-it` (larger, more capable, 4B parameters)
 
-## 📁 Project Structure
+## Technical Requirements
 
-```
-multimodal-streamlit-app/
-├── src/
-│   ├── models/
-│   │   └── data_models.py          # Data structures (PromptData, SessionResult)
-│   ├── services/
-│   │   ├── input_handlers.py       # Text, image, audio processing
-│   │   ├── model_service.py        # Gemma 3n integration
-│   │   ├── storage_service.py      # Session and file management
-│   │   └── batch_service.py        # Batch processing and execution
-│   ├── ui/
-│   │   └── main_interface.py       # Streamlit UI components
-│   └── app_controller.py           # Main application controller
-├── tests/                          # Unit tests
-├── data/                          # Storage directory (created automatically)
-├── streamlit_app.py               # Application entry point
-├── config.py                      # Configuration management
-├── requirements.txt               # Python dependencies
-├── .env.example                   # Environment variables template
-└── README.md                      # This file
-```
+- **GPU Memory:** 8GB+ VRAM for optimal performance
+- **System RAM:** 16GB+ recommended
+- **Storage:** 10GB+ for model and data files
+- **Network:** Required for initial model download
 
-## 🧪 Testing
+## Clinical Considerations
 
-Run the test suite:
+⚠️ **Important:** This application is for screening purposes only and is not a diagnostic tool. Results should be interpreted by qualified healthcare professionals following appropriate clinical guidelines.
 
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=src
-
-# Run specific test file
-pytest tests/test_data_models.py
-
-# Run with verbose output
-pytest -v
-```
-
-## 🔧 Development
-
-### Adding New Features
-
-1. **Input Handlers**: Extend `src/services/input_handlers.py` for new input types
-2. **Model Integration**: Modify `src/services/model_service.py` for model changes
-3. **UI Components**: Add new interface elements in `src/ui/main_interface.py`
-4. **Storage**: Extend `src/services/storage_service.py` for new data types
-
-### Code Style
-
-- Follow PEP 8 guidelines
-- Use type hints for function parameters and return values
-- Add docstrings for all classes and methods
-- Write unit tests for new functionality
-
-## 🐛 Troubleshooting
-
-### Common Issues
-
-**Model Loading Fails**
-- Ensure you have sufficient GPU memory (8GB+ recommended)
-- Check internet connection for model download
-- Verify CUDA installation if using GPU
-
-**Out of Memory Errors**
-- Reduce batch size
-- Lower max_tokens setting
-- Use smaller model variant (E2B instead of E4B)
-- Resize large images before upload
-
-**File Upload Issues**
-- Check file size limits in configuration
-- Ensure file formats are supported
-- Verify storage directory permissions
-
-**Session Loading Fails**
-- Check if session files exist in storage directory
-- Verify file permissions
-- Look for corrupted session files
-
-### Performance Optimization
-
-- **GPU Usage**: Ensure CUDA is properly configured for faster inference
-- **Memory Management**: Process smaller batches to avoid memory issues
-- **File Storage**: Regularly clean up old sessions and files
-- **Image Optimization**: Resize large images before upload
-
-## 📊 Monitoring and Maintenance
-
-### Storage Management
-
-The application automatically manages file storage:
-- Session data stored in JSON format
-- Media files organized by type (images/, audio/)
-- Automatic cleanup of orphaned files
-- Session cleanup after configurable days
-
-### Performance Monitoring
-
-Monitor these metrics:
-- Model inference time per prompt
-- Memory usage during batch processing
-- Storage space utilization
-- Session load/save performance
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
-## 📄 License
+## License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
 
-## 🙏 Acknowledgments
+## Acknowledgments
 
 - Google for the Gemma 3n model
-- Streamlit team for the excellent web framework
+- Streamlit team for the web framework
 - Hugging Face for the transformers library
-- Contributors and testers
+- Chonnam National University Hospital
+- Harvard/MGH
+- GIST
 
-## 📞 Support
+## Support
 
 For support and questions:
-- Create an issue on GitHub
-- Check the troubleshooting section above
-- Review the configuration options
-
+- GitHub:
+- Youtube link: 
+- Contact: torot383@naver.com
 ---
 
-**Happy chatting with your multimodal AI! 🚀**
+**Advancing mental health screening through AI! 🧠💚**
