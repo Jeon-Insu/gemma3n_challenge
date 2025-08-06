@@ -166,8 +166,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 For support and questions:
 - GitHub: https://github.com/Jeon-Insu/gemma3n_challenge
 - Youtube link: 
-- Contact: torot383@naver.com
+- Contact: torot383@naver.com, skyxmin@naver.com
 ---
 
 
 **Advancing mental health screening through AI! 🧠💚**
+
