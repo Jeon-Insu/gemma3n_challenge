@@ -163,7 +163,9 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Streamlit team for the web framework
 - Hugging Face for the transformers library
 - Chonnam National University Hospital
-- Harvard/MGH
+- Kyungsang Kim, working on Medical, Multimodal, Agent AI
+  Contact: kkim24 (at) mgh.harvard.edu, 
+  Massachusetts General Hospital and Harvard Medical School.
 - GIST
 
 ## Support
@@ -176,6 +178,7 @@ For support and questions:
 
 
 **Advancing mental health screening through AI! 🧠💚**
+
 
 
 
