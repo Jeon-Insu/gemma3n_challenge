@@ -4,7 +4,7 @@ This project is a web-based application that performs comprehensive depression s
 
 ➡️ Youtube
 
-[![YouTube Video](https://img.youtube.com/watch?v=VJarGtcCFAk&feature=youtu.be/4720.jpg)](https://www.youtube.com/watch?v=VJarGtcCFAk&feature=youtu.be)
+[![YouTube Video](https://img.youtube.com/watch?v=VJarGtcCFAk&feature=youtu.be/0.jpg)](https://www.youtube.com/watch?v=VJarGtcCFAk&feature=youtu.be)
 
 
 🚀 **Live Demo**
@@ -176,6 +176,7 @@ For support and questions:
 
 
 **Advancing mental health screening through AI! 🧠💚**
+
 
 
 
