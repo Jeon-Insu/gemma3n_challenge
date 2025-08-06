@@ -162,22 +162,37 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 - Google for the Gemma 3n model
 - Streamlit team for the web framework
 - Hugging Face for the transformers library
-- Chonnam National University Hospital
+- Ju-Wan Kim, working on digital psychiatry and CBT
+  at Department of Psychiatry, Chonnam National University Hospital
+  Contact: tarot383@naver.com
+- Min Jhon, working on digital biomarker research in psychiatry,
+  geriatric psychiatry at Department of Psychiatry,
+  Chonnam National University Hospital
+  Contact: minjhon@chonnam.ac.kr 
 - Kyungsang Kim, working on Medical, Multimodal, Agent AI
   Contact: kkim24 (at) mgh.harvard.edu, 
-  Massachusetts General Hospital and Harvard Medical School.
-- GIST
+  Massachusetts General Hospital and Harvard Medical School
+- Seojeon Park, Ph.D. Student, In the department of AI convergence
+  at Gwangju Institute of Science and Technology
+  Contact: seoellepark@gmail.com 
+- Insu Jeon, M.S. Student, In the department of AI convergence
+  at Gwangju Institute of Science and Technology
+  Contact: jis3369@gmail.com  
+- Eun-Kyoung Jeon, working on Electronics and
+  Telecommunications Research Institute,
+  Contact: ekjeon@etri.re.kr
 
 ## Support
 
 For support and questions:
 - GitHub: https://github.com/Jeon-Insu/gemma3n_challenge
 - Youtube link: https://youtu.be/VJarGtcCFAk
-- Contact: torot383@naver.com, skyxmin@naver.com
+- Contact: tarot383@naver.com , skyxmin@naver.com
 ---
 
 
 **Advancing mental health screening through AI! 🧠💚**
+
 
 
 
